@@ -1,38 +1,34 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-ENV/
-pip-log.txt
-pip-delete-this-directory.txt
-
-# PyCharm
-.idea/
-*.iml
-*.iws
-
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# Logs
-*.log
-logs/
-
-# Test coverage
-htmlcov/
-.coverage
-.pytest_cache/
-
-# Docker
-docker-compose.override.yml
+# Configuration files with sensitive data
+config/systems.yml
+src/config/systems.yml
+*.yml
+*.yaml
 
 # SSH keys and secrets
 *.pem
 *.key
 secrets/
+.env
+.env.local
+
+# Test outputs (may contain sensitive data)
+test_output/
+logs/
+EOF
+# Configuration files with sensitive data
+src/config/systems.yml
+config/systems.yml
+*.yml.backup
+
+# Python cache and IDE files
+__pycache__/
+.idea/
+*.pyc
+*.pyo
+
+# Log files
+*.log
+test_collection.log
+
+# Test outputs
+test_output/

@@ -1,0 +1,35 @@
+# Configuration template for infrastructure documentation collection
+# Copy this file to systems.yml and customize for your environment
+
+systems:
+  - name: "unraid-server"
+    type: "docker"
+    host: "YOUR_UNRAID_IP"
+    port: 22
+    username: "root"
+    ssh_key_path: "PATH_TO_YOUR_SSH_KEY"
+    enabled: true
+
+  - name: "pve-nuc"
+    type: "proxmox"
+    host: "YOUR_PROXMOX_IP"
+    port: 22
+    username: "root"
+    ssh_key_path: "PATH_TO_YOUR_SSH_KEY"
+    enabled: false
+
+git:
+  local_remote_name: "gitea"
+  local_remote_url: "http://YOUR_GITEA_IP:3001/username/SystemDocumentation.git"
+  offsite_remote_name: "github"
+  offsite_remote_url: "git@github.com:username/SystemDocumentation.git"
+  commit_author_name: "Infrastructure Bot"
+  commit_author_email: "infra-bot@yourdomain.com"
+  sanitize_for_offsite: true
+
+collection:
+  parallel_collections: false
+  max_workers: 3
+  retry_attempts: 3
+  retry_delay: 5
+  output_format: "json"
