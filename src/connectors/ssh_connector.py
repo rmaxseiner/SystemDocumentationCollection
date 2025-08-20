@@ -2,6 +2,7 @@
 """
 SSH connector for remote system access.
 Handles secure connections to remote hosts for data collection.
+Enhanced with better logging and error context.
 """
 
 import paramiko
@@ -21,12 +22,14 @@ class CommandResult:
     error: str = ""
     exit_code: int = 0
     execution_time: float = 0.0
+    command: str = ""  # Added to track which command was executed
 
 
 class SSHConnector:
     """
     SSH connector for executing commands on remote systems.
     Supports key-based and password authentication.
+    Enhanced with better logging and error context.
     """
 
     def __init__(self, host: str, port: int = 22, username: str = 'root',
@@ -100,19 +103,20 @@ class SSHConnector:
             self.client = None
             self.logger.debug(f"SSH connection closed to {self.host}")
 
-    def execute_command(self, command: str, timeout: int = None) -> CommandResult:
+    def execute_command(self, command: str, timeout: int = None, log_command: bool = True) -> CommandResult:
         """
         Execute a command on the remote host.
 
         Args:
             command: Command to execute
             timeout: Command timeout (uses connection timeout if None)
+            log_command: Whether to log the command being executed
 
         Returns:
             CommandResult: Command execution result
         """
         if not self.client:
-            return CommandResult(False, error="No SSH connection established")
+            return CommandResult(False, error="No SSH connection established", command=command)
 
         if timeout is None:
             timeout = self.timeout
@@ -120,7 +124,8 @@ class SSHConnector:
         start_time = time.time()
 
         try:
-            self.logger.debug(f"Executing command: {command}")
+            if log_command:
+                self.logger.debug(f"Executing: {command}")
 
             stdin, stdout, stderr = self.client.exec_command(
                 command,
@@ -143,29 +148,118 @@ class SSHConnector:
             success = exit_code == 0
 
             if success:
-                self.logger.debug(f"Command completed successfully in {execution_time:.2f}s")
+                self.logger.debug(
+                    f"Command '{self._truncate_command(command)}' completed successfully in {execution_time:.2f}s")
             else:
-                self.logger.warning(f"Command failed with exit code {exit_code}: {error}")
+                # Enhanced error logging with context
+                error_msg = self._format_command_error(command, exit_code, error, execution_time)
+                self.logger.warning(error_msg)
 
             return CommandResult(
                 success=success,
                 output=output,
                 error=error,
                 exit_code=exit_code,
-                execution_time=execution_time
+                execution_time=execution_time,
+                command=command
             )
 
         except socket.timeout:
             execution_time = time.time() - start_time
-            error_msg = f"Command timeout after {execution_time:.2f}s"
+            error_msg = f"Command '{self._truncate_command(command)}' timed out after {execution_time:.2f}s (timeout: {timeout}s)"
             self.logger.error(error_msg)
-            return CommandResult(False, error=error_msg, execution_time=execution_time)
+            return CommandResult(False, error=error_msg, execution_time=execution_time, command=command)
 
         except Exception as e:
             execution_time = time.time() - start_time
-            error_msg = f"Command execution failed: {str(e)}"
+            error_msg = f"Command '{self._truncate_command(command)}' execution failed: {str(e)}"
             self.logger.error(error_msg)
-            return CommandResult(False, error=error_msg, execution_time=execution_time)
+            return CommandResult(False, error=error_msg, execution_time=execution_time, command=command)
+
+    def execute_command_with_fallback(self, primary_command: str, fallback_command: str = None,
+                                      timeout: int = None, context: str = "") -> CommandResult:
+        """
+        Execute a command with an optional fallback if the primary command fails.
+
+        Args:
+            primary_command: Primary command to try
+            fallback_command: Fallback command if primary fails
+            timeout: Command timeout
+            context: Context description for logging
+
+        Returns:
+            CommandResult: Result from successful command or last failure
+        """
+        context_prefix = f"[{context}] " if context else ""
+
+        # Try primary command
+        self.logger.debug(f"{context_prefix}Trying primary command: {primary_command}")
+        result = self.execute_command(primary_command, timeout, log_command=False)
+
+        if result.success:
+            self.logger.debug(f"{context_prefix}Primary command succeeded")
+            return result
+
+        # If primary fails and we have a fallback
+        if fallback_command:
+            self.logger.debug(
+                f"{context_prefix}Primary command failed (exit {result.exit_code}), trying fallback: {fallback_command}")
+            fallback_result = self.execute_command(fallback_command, timeout, log_command=False)
+
+            if fallback_result.success:
+                self.logger.debug(f"{context_prefix}Fallback command succeeded")
+                return fallback_result
+            else:
+                self.logger.warning(f"{context_prefix}Both primary and fallback commands failed")
+                return fallback_result
+        else:
+            # Log the failure with context
+            if result.exit_code == 127:
+                self.logger.debug(f"{context_prefix}Command not found: {primary_command}")
+            else:
+                self.logger.debug(
+                    f"{context_prefix}Command failed with exit code {result.exit_code}: {primary_command}")
+
+            return result
+
+    def check_command_availability(self, command: str) -> bool:
+        """Check if a command is available on the system"""
+        result = self.execute_command(f"which {command} >/dev/null 2>&1", log_command=False)
+        return result.success
+
+    def _truncate_command(self, command: str, max_length: int = 80) -> str:
+        """Truncate command for logging if it's too long"""
+        if len(command) <= max_length:
+            return command
+        return command[:max_length - 3] + "..."
+
+    def _format_command_error(self, command: str, exit_code: int, error: str, execution_time: float) -> str:
+        """Format command error message with context"""
+        truncated_cmd = self._truncate_command(command)
+
+        # Common exit codes and their meanings
+        exit_code_meanings = {
+            1: "General error",
+            2: "Misuse of shell builtin",
+            126: "Command not executable",
+            127: "Command not found",
+            128: "Invalid exit argument",
+            130: "Script terminated by Ctrl+C"
+        }
+
+        meaning = exit_code_meanings.get(exit_code, "Unknown error")
+
+        error_parts = [f"Command '{truncated_cmd}' failed"]
+        error_parts.append(f"exit code {exit_code} ({meaning})")
+        error_parts.append(f"time {execution_time:.2f}s")
+
+        if error.strip():
+            # Only show first line of error to avoid log spam
+            first_error_line = error.strip().split('\n')[0]
+            if first_error_line:
+                error_parts.append(f"stderr: {first_error_line}")
+
+        return " | ".join(error_parts)
 
     def execute_commands(self, commands: list, stop_on_error: bool = True) -> Dict[str, CommandResult]:
         """
@@ -185,19 +279,19 @@ class SSHConnector:
             results[command] = result
 
             if not result.success and stop_on_error:
-                self.logger.error(f"Stopping execution due to failed command: {command}")
+                self.logger.error(f"Stopping execution due to failed command: {self._truncate_command(command)}")
                 break
 
         return results
 
     def file_exists(self, file_path: str) -> bool:
         """Check if a file exists on the remote system"""
-        result = self.execute_command(f"test -f {file_path}")
+        result = self.execute_command(f"test -f {file_path}", log_command=False)
         return result.success
 
     def directory_exists(self, dir_path: str) -> bool:
         """Check if a directory exists on the remote system"""
-        result = self.execute_command(f"test -d {dir_path}")
+        result = self.execute_command(f"test -d {dir_path}", log_command=False)
         return result.success
 
     def read_file(self, file_path: str) -> CommandResult:
@@ -258,7 +352,7 @@ class SSHConnector:
 
     def test_connection(self) -> bool:
         """Test the SSH connection with a simple command"""
-        result = self.execute_command("echo 'connection_test'")
+        result = self.execute_command("echo 'connection_test'", log_command=False)
         return result.success and 'connection_test' in result.output
 
     def get_system_info(self) -> Dict[str, Any]:
@@ -275,7 +369,7 @@ class SSHConnector:
         system_info = {}
 
         for key, command in commands.items():
-            result = self.execute_command(command)
+            result = self.execute_command(command, log_command=False)
             if result.success:
                 system_info[key] = result.output.strip()
             else:

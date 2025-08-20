@@ -15,7 +15,7 @@ import logging
 class SystemConfig:
     """Configuration for a target system"""
     name: str
-    type: str  # 'docker', 'proxmox', 'unraid', 'api'
+    type: str  # 'docker', 'proxmox', 'unraid', 'api', 'prometheus', 'grafana', 'system_documentation'
     host: str
     port: int = 22
     username: str = 'root'
@@ -26,13 +26,27 @@ class SystemConfig:
     enabled: bool = True
     timeout: int = 30
 
+    # Prometheus/Grafana specific fields
+    container_name: Optional[str] = None
+    use_container: bool = True
+    config_path: Optional[str] = None
+    api_token: Optional[str] = None
+    api_user: Optional[str] = None
+    api_password: Optional[str] = None
+
+    # System documentation specific fields
+    system_type: Optional[str] = 'auto'  # 'unraid', 'proxmox', 'ubuntu', 'auto'
+
     def __post_init__(self):
         """Validate configuration after initialization"""
         if self.type == 'api' and not self.api_endpoint:
             raise ValueError(f"API endpoint required for system {self.name}")
 
-        if self.type in ['docker', 'proxmox', 'unraid'] and not self.host:
+        if self.type in ['docker', 'proxmox', 'unraid', 'system_documentation'] and not self.host:
             raise ValueError(f"Host required for system {self.name}")
+
+        if self.type in ['prometheus', 'grafana'] and not self.container_name and self.use_container:
+            raise ValueError(f"Container name required for containerized {self.type} collection")
 
 
 @dataclass

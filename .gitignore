@@ -32,3 +32,6 @@ test_collection.log
 
 # Test outputs
 test_output/
+/collected_data/
+/collected_configs/
+/analysis_output/
