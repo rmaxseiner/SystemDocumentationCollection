@@ -1,6 +1,6 @@
 # src/config/settings.py
 """
-Configuration management for the infrastructure documentation collection system.
+Enhanced configuration management with service collection support.
 """
 
 import os
@@ -15,7 +15,7 @@ import logging
 class SystemConfig:
     """Configuration for a target system"""
     name: str
-    type: str  # 'docker', 'proxmox', 'unraid', 'api', 'prometheus', 'grafana', 'system_documentation'
+    type: str  # 'docker', 'proxmox', 'prometheus', 'grafana', 'system_documentation'
     host: str
     port: int = 22
     username: str = 'root'
@@ -25,6 +25,11 @@ class SystemConfig:
     docker_socket: Optional[str] = None
     enabled: bool = True
     timeout: int = 30
+
+    # Service collection settings for Docker hosts
+    collect_services: bool = False
+    service_definitions: Optional[Dict] = None
+    services_output_dir: Optional[str] = None
 
     # Prometheus/Grafana specific fields
     container_name: Optional[str] = None
@@ -50,6 +55,18 @@ class SystemConfig:
 
 
 @dataclass
+class ServiceCollectionConfig:
+    """Service collection configuration"""
+    enabled: bool = True
+    output_directory: str = "infrastructure-docs/services"
+    service_definitions: Dict[str, Dict] = None
+
+    def __post_init__(self):
+        if self.service_definitions is None:
+            self.service_definitions = {}
+
+
+@dataclass
 class GitConfig:
     """Git repository configuration"""
     local_remote_name: str = 'gitea'
@@ -72,7 +89,7 @@ class CollectionConfig:
 
 
 class ConfigManager:
-    """Manages configuration loading and validation"""
+    """Enhanced configuration manager with service collection support"""
 
     def __init__(self, config_file: str = None):
         self.logger = logging.getLogger('config_manager')
@@ -84,6 +101,7 @@ class ConfigManager:
             self.config_file = self._find_config_file()
 
         self.systems: List[SystemConfig] = []
+        self.service_collection = ServiceCollectionConfig()
         self.git_config = GitConfig()
         self.collection_config = CollectionConfig()
 
@@ -109,7 +127,7 @@ class ConfigManager:
         return default_location
 
     def _create_default_config(self, config_path: Path):
-        """Create a default configuration file"""
+        """Create a default configuration file with service collection"""
         config_path.parent.mkdir(parents=True, exist_ok=True)
 
         default_config = {
@@ -121,7 +139,7 @@ class ConfigManager:
                     'port': 22,
                     'username': 'root',
                     'ssh_key_path': '/app/.ssh/unraid_key',
-                    'docker_socket': 'unix:///var/run/docker.sock',
+                    'collect_services': True,
                     'enabled': True
                 },
                 {
@@ -134,6 +152,28 @@ class ConfigManager:
                     'enabled': True
                 }
             ],
+            'service_collection': {
+                'enabled': True,
+                'output_directory': 'infrastructure-docs/services',
+                'service_definitions': {
+                    'homepage': {
+                        'config_paths': [
+                            '/app/config/settings.yaml',
+                            '/app/config/services.yaml',
+                            '/app/config/widgets.yaml'
+                        ],
+                        'output_dir': 'homepage'
+                    },
+                    'grafana': {
+                        'config_paths': [
+                            '/etc/grafana/grafana.ini',
+                            '/etc/grafana/provisioning/dashboards/*.yaml'
+                        ],
+                        'api_export': True,
+                        'output_dir': 'grafana'
+                    }
+                }
+            },
             'git': {
                 'local_remote_name': 'gitea',
                 'local_remote_url': 'http://10.20.0.4:3001/ron-maxseiner/SystemDocumentation.git',
@@ -149,16 +189,6 @@ class ConfigManager:
                 'retry_attempts': 3,
                 'retry_delay': 5,
                 'output_format': 'json'
-            },
-            'sanitization': {
-                'ip_addresses': [
-                    {'pattern': '10\\.0\\.0\\.\\d+', 'replacement': '10.0.0.XXX'},
-                    {'pattern': '192\\.168\\.\\d+\\.\\d+', 'replacement': '192.168.X.XXX'}
-                ],
-                'credentials': [
-                    {'pattern': 'token:\\s*[a-zA-Z0-9_-]+', 'replacement': 'token: REDACTED'},
-                    {'pattern': 'password:\\s*\\S+', 'replacement': 'password: REDACTED'}
-                ]
             }
         }
 
@@ -175,6 +205,10 @@ class ConfigManager:
 
             # Load systems configuration
             self._load_systems_config(config_data.get('systems', []))
+
+            # Load service collection configuration
+            service_data = config_data.get('service_collection', {})
+            self.service_collection = ServiceCollectionConfig(**service_data)
 
             # Load git configuration
             git_data = config_data.get('git', {})
@@ -194,7 +228,7 @@ class ConfigManager:
             raise
 
     def _load_systems_config(self, systems_data: List[Dict]):
-        """Load systems configuration"""
+        """Load systems configuration with service collection support"""
         self.systems = []
 
         for system_data in systems_data:
@@ -203,6 +237,11 @@ class ConfigManager:
                 if 'api_token_env' in system_data:
                     env_var = system_data['api_token_env']
                     system_data['api_token'] = os.getenv(env_var)
+
+                # Add service collection settings to Docker systems
+                if system_data.get('type') == 'docker' and system_data.get('collect_services', False):
+                    system_data['service_definitions'] = self.service_collection.service_definitions
+                    system_data['services_output_dir'] = self.service_collection.output_directory
 
                 system_config = SystemConfig(**system_data)
                 if system_config.enabled:
@@ -215,6 +254,11 @@ class ConfigManager:
     def get_systems_by_type(self, system_type: str) -> List[SystemConfig]:
         """Get all systems of a specific type"""
         return [system for system in self.systems if system.type == system_type]
+
+    def get_docker_systems_with_service_collection(self) -> List[SystemConfig]:
+        """Get Docker systems that have service collection enabled"""
+        return [system for system in self.systems
+                if system.type == 'docker' and system.collect_services]
 
     def get_system_by_name(self, name: str) -> Optional[SystemConfig]:
         """Get system configuration by name"""
@@ -240,6 +284,11 @@ class ConfigManager:
                 if not self._validate_system_config(system):
                     return False
 
+            # Validate service collection configuration
+            if self.service_collection.enabled:
+                if not self.service_collection.service_definitions:
+                    self.logger.warning("Service collection enabled but no service definitions provided")
+
             # Validate git configuration
             if not self.git_config.local_remote_url:
                 self.logger.warning("No local git remote configured")
@@ -259,6 +308,11 @@ class ConfigManager:
         # Check API token for API-based systems
         if system.type == 'api' and not system.api_token_env:
             self.logger.warning(f"No API token configured for {system.name}")
+
+        # Validate service collection settings for Docker systems
+        if system.type == 'docker' and system.collect_services:
+            if not self.service_collection.enabled:
+                self.logger.warning(f"Service collection disabled globally but enabled for {system.name}")
 
         return True
 

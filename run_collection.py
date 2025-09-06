@@ -1,11 +1,11 @@
+
 #!/usr/bin/env python3
 """
-Enhanced Infrastructure Documentation Collection
-Collects both system state and configuration files from all infrastructure components.
+Consolidated Infrastructure Documentation Collection
 """
 
 import sys
-import logging
+import argparse
 from pathlib import Path
 import json
 from datetime import datetime
@@ -13,89 +13,106 @@ from datetime import datetime
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
+from src.utils.logging_config import setup_logging, get_logger
 from src.config.settings import initialize_config
 from src.collectors.docker_collector import DockerCollector
 from src.collectors.proxmox_collector import ProxmoxCollector
-from src.collectors.prometheus_collector import PrometheusCollector
-from src.collectors.grafana_collector import GrafanaCollector
 from src.collectors.system_documentation_collector import SystemDocumentationCollector
 
 
-def setup_logging():
-    """Configure logging for collection run"""
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler('enhanced_collection.log')
-        ]
-    )
 
-
-def get_collector_for_system(system):
-    """Get appropriate collector for system type"""
+def get_collector_for_system(system, config_manager):
+    """Get appropriate collector for system type with service definitions"""
     collectors = {
         'docker': DockerCollector,
         'proxmox': ProxmoxCollector,
-        'prometheus': PrometheusCollector,
-        'grafana': GrafanaCollector,
         'system_documentation': SystemDocumentationCollector
     }
 
     collector_class = collectors.get(system.type)
     if collector_class:
-        return collector_class(system.name, system.__dict__)
+        # Create system config dict
+        system_config = system.__dict__.copy()
+
+        # Add service collection settings for Docker systems
+        if system.type == 'docker' and system.collect_services:
+            logger.info(f"Adding service definitions to {system.name}")
+            system_config['service_definitions'] = config_manager.service_collection.service_definitions
+            system_config['services_output_dir'] = config_manager.service_collection.output_directory
+            logger.debug(f"Added {len(system_config['service_definitions'])} service definitions")
+
+        return collector_class(system.name, system_config)
     else:
-        print(f"⚠️  No collector available for type '{system.type}'")
+        logger.warning(f"No collector available for type '{system.type}'")
         return None
 
 
-def run_enhanced_collection():
-    """Run enhanced collection from all configured systems"""
-    print("🚀 Starting Enhanced Infrastructure Documentation Collection")
-    print("=" * 70)
+def run_consolidated_collection(collect_services_only=False, collect_system_only=False, enable_debug=False):
+    """Run consolidated collection from all configured systems"""
+    print("🚀 Starting Consolidated Infrastructure Documentation Collection")
+    print("=" * 80)
 
-    setup_logging()
+    # Set up logging
+    setup_logging(enable_debug=enable_debug)
+    global logger
+    logger = get_logger('collection_main')
 
     # Load configuration
     config = initialize_config()
 
     if not config.validate_configuration():
+        logger.error("Configuration validation failed")
         print("❌ Configuration validation failed")
         return False
 
+    logger.info(f"Found {len(config.systems)} configured systems")
     print(f"📋 Found {len(config.systems)} configured systems")
+
+    if config.service_collection.enabled:
+        service_count = len(config.service_collection.service_definitions)
+        logger.info(f"Service collection enabled with {service_count} service types")
+        print(f"🔧 Service collection enabled with {service_count} service types")
 
     # Create output directories
     output_dir = Path('collected_data')
-    config_dir = Path('collected_configs')
+    services_dir = Path(config.service_collection.output_directory)
+
     output_dir.mkdir(exist_ok=True)
-    config_dir.mkdir(exist_ok=True)
+    services_dir.mkdir(exist_ok=True)
 
     # Collect from each system
     results = {}
+    total_services = 0
+    total_configs = 0
 
     for system in config.get_enabled_systems():
+        # Skip non-service systems if only collecting services
+        if collect_services_only and (system.type != 'docker' or not system.collect_services):
+            continue
+
+        # Skip Docker service collection if only collecting system data
+        if collect_system_only and system.type == 'docker':
+            system.collect_services = False
+
         print(f"\n📡 Collecting from {system.name} ({system.type})...")
+        logger.info(f"Starting collection from {system.name} ({system.type})")
+
+        if system.type == 'docker' and system.collect_services:
+            print(f"   🔧 Service collection enabled")
 
         try:
-            collector = get_collector_for_system(system)
+            collector = get_collector_for_system(system, config)
             if not collector:
                 continue
 
             result = collector.collect()
 
             if result.success:
+                logger.info(f"{system.name}: Collection successful")
                 print(f"✅ {system.name}: Collection successful")
 
-                # Determine output directory based on collector type
-                if system.type in ['prometheus', 'grafana']:
-                    # Configuration collectors go to config directory
-                    output_base = config_dir
-                else:
-                    # System state collectors go to data directory
-                    output_base = output_dir
+                # All collectors save to data directory
+                output_base = output_dir
 
                 # Save to file
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -117,6 +134,24 @@ def run_enhanced_collection():
                     print(f"   🌐 Networks: {len(networks)}")
                     print(f"   💽 Volumes: {len(volumes)}")
 
+                    # Service collection summary
+                    service_configs = data.get('service_configurations', {})
+                    if service_configs:
+                        summary = service_configs.get('collection_summary', {})
+                        services_found = summary.get('total_services', 0)
+                        configs_found = summary.get('config_files_collected', 0)
+
+                        if services_found > 0:
+                            print(f"   🔧 Services: {services_found} services, {configs_found} config files")
+                            total_services += services_found
+                            total_configs += configs_found
+
+                            # Show service breakdown
+                            for service_type, info in summary.get('services_by_type', {}).items():
+                                instances = info.get('instances', 0)
+                                config_files = info.get('config_files', 0)
+                                print(f"      - {service_type}: {instances} instances, {config_files} configs")
+
                 elif system.type == 'proxmox':
                     vms = data.get('vms', [])
                     lxc = data.get('lxc_containers', [])
@@ -126,80 +161,65 @@ def run_enhanced_collection():
                     print(f"   💾 Storage: {len(storage)}")
 
                 elif system.type == 'system_documentation':
-                    # System documentation collector
                     hardware = data.get('hardware_profile', {})
                     services = data.get('service_status', {})
-                    storage = data.get('storage_configuration', {})
                     print(f"   🖥️  System: {data.get('system_overview', {}).get('hostname', 'unknown')}")
                     print(f"   💻 CPU: {hardware.get('cpu', {}).get('model_name', 'unknown')[:50]}...")
                     print(f"   💾 Memory: {hardware.get('memory', {}).get('total_gb', 'unknown')} GB")
                     print(f"   🔧 Services: {len(services.get('monitoring', {}))}")
 
-                elif system.type in ['prometheus', 'grafana']:
-                    # Count configuration files
-                    config_files = [k for k, v in data.items() if
-                                    isinstance(v, str) and k.endswith(('.yml', '.yaml', '.json'))]
-                    print(f"   📄 Config files: {len(config_files)}")
-                    if config_files:
-                        print(f"   📋 Files: {', '.join(config_files[:3])}")
-                        if len(config_files) > 3:
-                            print(f"            ... and {len(config_files) - 3} more")
-
-                elif system.type == 'grafana':
-                    # Count API data and config files
-                    api_items = [k for k in data.keys() if k.startswith('api/')]
-                    config_items = [k for k in data.keys() if k.startswith('config/')]
-                    print(f"   📊 API data: {len(api_items)}")
-                    print(f"   📄 Config files: {len(config_items)}")
-
             else:
+                logger.error(f"{system.name}: Collection failed - {result.error}")
                 print(f"❌ {system.name}: Collection failed - {result.error}")
 
             results[system.name] = result
 
         except Exception as e:
+            logger.exception(f"{system.name}: Exception during collection")
             print(f"❌ {system.name}: Exception - {str(e)}")
-            import traceback
-            traceback.print_exc()
 
     # Summary
-    print("\n" + "=" * 70)
-    print("📊 Collection Summary:")
+    print("\n" + "=" * 80)
+    print("📊 Consolidated Collection Summary")
 
     successful = sum(1 for r in results.values() if r.success)
     total = len(results)
 
-    print(f"   Successful: {successful}/{total}")
-    print(f"   System state data: {output_dir.absolute()}")
-    print(f"   Configuration files: {config_dir.absolute()}")
+    logger.info(f"Collection completed: {successful}/{total} successful")
+    print(f"   ✅ Successful: {successful}/{total}")
+    print(f"   📈 System state data: {output_dir.absolute()}")
+
+    if total_services > 0:
+        print(f"   🔧 Service configurations: {services_dir.absolute()}")
+        print(f"   📦 Total services: {total_services}")
+        print(f"   📄 Total service config files: {total_configs}")
 
     # Show what was collected
     if successful > 0:
         print("\n📁 Collection Results:")
-
-        # Count files by type
         data_files = list(output_dir.glob("*.json"))
-        config_files = list(config_dir.glob("*.json"))
-
         print(f"   📈 System state files: {len(data_files)}")
-        for file in sorted(data_files)[-5:]:  # Show last 5
+        for file in sorted(data_files)[-5:]:
             print(f"      • {file.name}")
 
-        if config_files:
-            print(f"   ⚙️  Configuration files: {len(config_files)}")
-            for file in sorted(config_files)[-5:]:  # Show last 5
-                print(f"      • {file.name}")
+        # Show service configurations
+        if services_dir.exists() and total_services > 0:
+            print(f"   🔧 Service configurations:")
+            for service_type_dir in sorted(services_dir.glob("*")):
+                if service_type_dir.is_dir():
+                    print(f"      📁 {service_type_dir.name}/")
+                    for instance_dir in sorted(service_type_dir.glob("*")):
+                        if instance_dir.is_dir():
+                            config_files = [f for f in instance_dir.iterdir()
+                                            if f.is_file() and f.name != 'collection_metadata.yml']
+                            print(f"         📁 {instance_dir.name}/ ({len(config_files)} configs)")
 
-        print("\n🎉 Enhanced collection completed!")
-        print("\n📝 Next steps:")
-        print("   1. Run: python simple_analyze.py collected_data")
-        print("   2. Review configuration files in collected_configs/")
-        print("   3. Commit to SystemDocumentation repository:")
-        print("      cd ../SystemDocumentation")
-        print("      # Copy files to appropriate directories")
-        print("      git add .")
-        print("      git commit -m 'Infrastructure collection update'")
-        print("      git push gitea main")
+        print("\n🎉 Consolidated collection completed!")
+        print("\n📚 Next steps:")
+        print("   1. Run: python analyze_infrastructure.py")
+        print("   2. Review collected data and configurations")
+        print("   3. Edit service configurations in infrastructure-docs/services/")
+        print("   4. Commit changes to git repository")
 
     return successful > 0
 
@@ -207,11 +227,18 @@ def run_enhanced_collection():
 def show_collection_status():
     """Show status of previous collections"""
     print("📊 Collection Status Overview")
-    print("=" * 40)
+    print("=" * 50)
 
     # Check existing files
     output_dir = Path('collected_data')
     config_dir = Path('collected_configs')
+
+    # Load config to get services directory
+    try:
+        config = initialize_config()
+        services_dir = Path(config.service_collection.output_directory)
+    except:
+        services_dir = Path('infrastructure-docs/services')
 
     if output_dir.exists():
         data_files = list(output_dir.glob("*.json"))
@@ -231,21 +258,45 @@ def show_collection_status():
     if config_dir.exists():
         config_files = list(config_dir.glob("*.json"))
         print(f"⚙️  Configuration files: {len(config_files)}")
-
         for file in config_files:
             print(f"   • {file.name}")
 
-    if not output_dir.exists() and not config_dir.exists():
+    if services_dir.exists():
+        service_types = [d for d in services_dir.iterdir() if d.is_dir()]
+        if service_types:
+            print(f"🔧 Service configurations: {len(service_types)} service types")
+            for service_type_dir in service_types:
+                instances = [d for d in service_type_dir.iterdir() if d.is_dir()]
+                print(f"   📁 {service_type_dir.name}: {len(instances)} instances")
+        else:
+            print("🔧 Service configurations: None found")
+
+    if not any([output_dir.exists(), config_dir.exists(), services_dir.exists()]):
         print("No previous collections found.")
-        print("Run: python run_enhanced_collection.py")
+        print("Run: python run_collection.py")
 
 
 def main():
-    """Main function"""
-    if len(sys.argv) > 1 and sys.argv[1] == 'status':
+    """Main function with command line arguments"""
+    parser = argparse.ArgumentParser(description='Consolidated Infrastructure Collection')
+    parser.add_argument('command', nargs='?', default='collect',
+                        choices=['collect', 'status', 'services-only', 'system-only'],
+                        help='Action to perform')
+    parser.add_argument('--debug', action='store_true',
+                        help='Enable debug logging')
+
+    args = parser.parse_args()
+
+    if args.command == 'status':
         show_collection_status()
+    elif args.command == 'services-only':
+        print("🔧 Collecting service configurations only...")
+        run_consolidated_collection(collect_services_only=True, enable_debug=args.debug)
+    elif args.command == 'system-only':
+        print("📈 Collecting system data only (no service configs)...")
+        run_consolidated_collection(collect_system_only=True, enable_debug=args.debug)
     else:
-        run_enhanced_collection()
+        run_consolidated_collection(enable_debug=args.debug)
 
 
 if __name__ == "__main__":

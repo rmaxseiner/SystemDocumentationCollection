@@ -4,12 +4,13 @@ Docker collector for gathering container configurations and system state.
 """
 
 import docker
-import subprocess
 import json
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+import yaml
+from pathlib import Path
 
-from .base_collector import SystemStateCollector, CollectionResult
+from .base_collector import SystemStateCollector
 from src.connectors.ssh_connector import SSHConnector
 
 
@@ -28,6 +29,12 @@ class DockerCollector(SystemStateCollector):
         self.docker_socket = config.get('docker_socket')
         self.use_ssh = not self.docker_socket
         self.ssh_connector = None
+
+        # ADD THESE NEW LINES:
+        # Service collection settings
+        self.collect_services = config.get('collect_services', False)
+        self.service_definitions = config.get('service_definitions', {})
+        self.services_output_dir = Path(config.get('services_output_dir', 'infrastructure-docs/services'))
 
         # Initialize SSH connector if needed
         if self.use_ssh:
@@ -92,17 +99,25 @@ class DockerCollector(SystemStateCollector):
             raise
 
     def _collect_via_ssh(self) -> Dict[str, Any]:
-        """Collect Docker information via SSH commands"""
+        """Collect Docker information via SSH commands including service configs"""
         try:
             # Connect via SSH
             if not self.ssh_connector.connect():
                 raise Exception("Failed to establish SSH connection")
 
-            # Collect data using docker commands
+            # Collect standard Docker data
             containers_data = self._get_containers_via_ssh()
             networks_data = self._get_networks_via_ssh()
             volumes_data = self._get_volumes_via_ssh()
             system_info = self._get_system_info_via_ssh()
+
+            # Collect service configurations if enabled
+            service_configs = {}
+            if self.collect_services:
+                print(f"DEBUG: Service collection enabled for {self.name}")
+                service_configs = self._collect_service_configurations(containers_data)
+            else:
+                print(f"DEBUG: Service collection disabled for {self.name}")
 
             self.ssh_connector.disconnect()
 
@@ -111,6 +126,7 @@ class DockerCollector(SystemStateCollector):
                 'networks': networks_data,
                 'volumes': volumes_data,
                 'system_info': system_info,
+                'service_configurations': service_configs,  # ADD THIS LINE
                 'collection_method': 'ssh'
             }
 
@@ -120,7 +136,7 @@ class DockerCollector(SystemStateCollector):
                 self.ssh_connector.disconnect()
             raise
 
-    def _get_containers_info(self, client: docker.DockerClient) -> List[Dict]:
+    def _get_containers_info(self, client) -> List[Dict]:
         """Get detailed container information via Docker client"""
         containers_info = []
 
@@ -154,7 +170,7 @@ class DockerCollector(SystemStateCollector):
 
         return containers_info
 
-    def _get_networks_info(self, client: docker.DockerClient) -> List[Dict]:
+    def _get_networks_info(self, client) -> List[Dict]:
         """Get Docker network information"""
         networks_info = []
 
@@ -180,7 +196,7 @@ class DockerCollector(SystemStateCollector):
 
         return networks_info
 
-    def _get_volumes_info(self, client: docker.DockerClient) -> List[Dict]:
+    def _get_volumes_info(self, client) -> List[Dict]:
         """Get Docker volume information"""
         volumes_info = []
 
@@ -204,7 +220,7 @@ class DockerCollector(SystemStateCollector):
 
         return volumes_info
 
-    def _get_system_info(self, client: docker.DockerClient) -> Dict:
+    def _get_system_info(self, client) -> Dict:
         """Get Docker system information"""
         try:
             info = client.info()
@@ -445,3 +461,323 @@ class DockerCollector(SystemStateCollector):
                 sanitized_vars.append(var)
 
         return sanitized_vars
+
+    def _collect_service_configurations(self, containers: List[Dict]) -> Dict[str, Any]:
+        """Collect service configurations from running containers"""
+        if not self.service_definitions:
+            self.logger.info("No service definitions provided for service config collection")
+            return {}
+
+        self.logger.info(f"Collecting service configurations from {len(containers)} containers")
+        self.logger.debug(f"Available service definitions: {list(self.service_definitions.keys())}")
+
+        collected_configs = {}
+        service_summary = {
+            'total_services': 0,
+            'services_by_type': {},
+            'config_files_collected': 0,
+            'collection_timestamp': datetime.now().isoformat()
+        }
+
+        running_containers = [c for c in containers if c.get('status') == 'running']
+        self.logger.info(f"Processing {len(running_containers)} running containers")
+
+        for container in running_containers:
+            container_name = container.get('name', '')
+            image = container.get('image', '')
+
+            service_type = self._identify_service_type(container_name, image)
+
+            if service_type and service_type in self.service_definitions:
+                self.logger.info(f"Collecting configs from {service_type} container: {container_name}")
+
+                configs = self._collect_container_service_configs(container_name, service_type)
+
+                if configs:
+                    service_key = f"{service_type}_{container_name}"
+                    collected_configs[service_key] = {
+                        'service_type': service_type,
+                        'container_name': container_name,
+                        'image': image,
+                        'configs': configs,
+                        'collected_at': datetime.now().isoformat()
+                    }
+
+                    # Update summary
+                    service_summary['total_services'] += 1
+                    if service_type not in service_summary['services_by_type']:
+                        service_summary['services_by_type'][service_type] = {
+                            'instances': 0,
+                            'config_files': 0
+                        }
+                    service_summary['services_by_type'][service_type]['instances'] += 1
+                    service_summary['services_by_type'][service_type]['config_files'] += len(configs)
+                    service_summary['config_files_collected'] += len(configs)
+
+                    self.logger.info(f"Collected {len(configs)} config files from {container_name}")
+                else:
+                    self.logger.debug(f"No configs found for {container_name}")
+            else:
+                self.logger.debug(f"No service definition found for {container_name} (image: {image})")
+
+        # Save configurations to files
+        if collected_configs:
+            self.logger.info(f"Saving {len(collected_configs)} service configurations")
+            saved_configs = self._save_service_configs(collected_configs)
+            service_summary['saved_configs'] = saved_configs
+        else:
+            self.logger.info("No service configurations to save")
+
+        return {
+            'collected_services': collected_configs,
+            'collection_summary': service_summary
+        }
+
+    def _identify_service_type(self, container_name: str, image: str) -> Optional[str]:
+        """Identify service type from container name and image"""
+        container_name_lower = container_name.lower()
+        image_lower = image.lower()
+
+        # Check known service patterns
+        for service_type in self.service_definitions.keys():
+            if (service_type in container_name_lower or
+                    service_type in image_lower or
+                    service_type.replace('-', '') in container_name_lower):
+                self.logger.debug(f"Found direct match: {service_type} for {container_name}")
+                return service_type
+
+        # Special cases for common variations
+        special_cases = {
+            'nginx-proxy-manager': ['nginx', 'proxy-manager', 'npm'],
+            'home-assistant': ['homeassistant', 'hass'],
+            'grafana': ['grafana'],
+            'prometheus': ['prometheus', 'prom'],
+            'alertmanager': ['alertmanager', 'alert-manager'],
+            'traefik': ['traefik'],
+            'gitea': ['gitea'],
+            'pihole': ['pihole', 'pi-hole'],
+            'unbound': ['unbound']
+        }
+
+        for service_type, patterns in special_cases.items():
+            for pattern in patterns:
+                if pattern in image_lower or pattern in container_name_lower:
+                    if service_type in self.service_definitions:
+                        self.logger.debug(f"Found special case match: {service_type} for {container_name}")
+                        return service_type
+
+        return None
+
+    def _collect_container_service_configs(self, container_name: str, service_type: str) -> Dict[str, str]:
+        """Collect configuration files for a specific service container"""
+        service_config = self.service_definitions.get(service_type, {})
+        config_paths = service_config.get('config_paths', [])
+
+        self.logger.debug(f"Collecting {len(config_paths)} config paths for {service_type}")
+
+        collected_configs = {}
+
+        for config_path in config_paths:
+            if '*' in config_path:
+                # Handle wildcard paths
+                dir_path = '/'.join(config_path.split('/')[:-1])
+                pattern = config_path.split('/')[-1]
+
+                result = self.ssh_connector.execute_command(
+                    f"docker exec {container_name} find {dir_path} -name '{pattern}' 2>/dev/null || true"
+                )
+
+                if result.success and result.output.strip():
+                    files_found = result.output.strip().split('\n')
+                    self.logger.debug(f"Found {len(files_found)} files matching {pattern}")
+
+                    for file_path in files_found:
+                        if file_path.strip():
+                            content = self._get_container_file_content(container_name, file_path.strip())
+                            if content:
+                                relative_path = file_path.replace(dir_path + '/', '') if dir_path != file_path else \
+                                file_path.split('/')[-1]
+                                collected_configs[relative_path] = content
+            else:
+                # Single file
+                content = self._get_container_file_content(container_name, config_path)
+                if content:
+                    filename = config_path.split('/')[-1]
+                    collected_configs[filename] = content
+
+        # Handle special exports (API-based configs)
+        if service_config.get('api_export') and service_type == 'grafana':
+            api_configs = self._export_grafana_configs(container_name)
+            collected_configs.update(api_configs)
+            if api_configs:
+                self.logger.debug(f"Added {len(api_configs)} API configs for {service_type}")
+
+        elif service_config.get('database_export') and service_type == 'nginx-proxy-manager':
+            db_configs = self._export_nginx_proxy_configs(container_name)
+            collected_configs.update(db_configs)
+            if db_configs:
+                self.logger.debug(f"Added {len(db_configs)} database configs for {service_type}")
+
+        # Filter out secrets if needed
+        if service_config.get('exclude_secrets'):
+            collected_configs = self._sanitize_service_configs(collected_configs, service_type)
+            self.logger.debug(f"Sanitized configs for {service_type}")
+
+        return collected_configs
+
+    def _get_container_file_content(self, container_name: str, file_path: str) -> Optional[str]:
+        """Get content of a file from container"""
+        result = self.ssh_connector.execute_command(
+            f"docker exec {container_name} cat {file_path} 2>/dev/null"
+        )
+
+        if result.success:
+            self.logger.debug(f"Read {file_path} ({len(result.output)} chars)")
+            return result.output
+        else:
+            self.logger.debug(f"Could not read {file_path}")
+            return None
+
+    def _export_grafana_configs(self, container_name: str) -> Dict[str, str]:
+        """Export Grafana dashboards and datasources via API"""
+        configs = {}
+
+        # Try to get dashboards via API
+        result = self.ssh_connector.execute_command(
+            f"docker exec {container_name} curl -s http://localhost:3000/api/search 2>/dev/null || true"
+        )
+
+        if result.success and result.output.strip():
+            try:
+                dashboards = json.loads(result.output)
+                configs['api_dashboards.json'] = json.dumps(dashboards, indent=2)
+            except json.JSONDecodeError:
+                pass
+
+        return configs
+
+    def _export_nginx_proxy_configs(self, container_name: str) -> Dict[str, str]:
+        """Export Nginx Proxy Manager configurations"""
+        configs = {}
+
+        # Try to export database content (if SQLite)
+        result = self.ssh_connector.execute_command(
+            f"docker exec {container_name} sqlite3 /data/database.sqlite '.dump' 2>/dev/null || true"
+        )
+
+        if result.success and result.output.strip():
+            configs['database_dump.sql'] = result.output
+
+        return configs
+
+    def _sanitize_service_configs(self, configs: Dict[str, str], service_type: str) -> Dict[str, str]:
+        """Remove sensitive information from configurations"""
+        sanitized = {}
+
+        for filename, content in configs.items():
+            if service_type == 'home-assistant':
+                sanitized_content = self._sanitize_home_assistant_config(content)
+            elif service_type == 'gitea':
+                sanitized_content = self._sanitize_gitea_config(content)
+            elif service_type == 'pihole':
+                sanitized_content = self._sanitize_pihole_config(content)
+            else:
+                sanitized_content = content
+
+            sanitized[filename] = sanitized_content
+
+        return sanitized
+
+    def _sanitize_home_assistant_config(self, content: str) -> str:
+        """Sanitize Home Assistant configuration"""
+        lines = content.split('\n')
+        sanitized_lines = []
+
+        for line in lines:
+            if any(secret in line.lower() for secret in ['password:', 'token:', 'api_key:', 'secret:']):
+                if ':' in line:
+                    key_part = line.split(':', 1)[0]
+                    sanitized_lines.append(f"{key_part}: !secret REDACTED")
+                else:
+                    sanitized_lines.append(line)
+            else:
+                sanitized_lines.append(line)
+
+        return '\n'.join(sanitized_lines)
+
+    def _sanitize_gitea_config(self, content: str) -> str:
+        """Sanitize Gitea configuration"""
+        lines = content.split('\n')
+        sanitized_lines = []
+
+        for line in lines:
+            if '=' in line and any(secret in line.lower() for secret in ['password', 'secret', 'key', 'token']):
+                key_part = line.split('=', 1)[0]
+                sanitized_lines.append(f"{key_part} = REDACTED")
+            else:
+                sanitized_lines.append(line)
+
+        return '\n'.join(sanitized_lines)
+
+    def _sanitize_pihole_config(self, content: str) -> str:
+        """Sanitize Pi-hole configuration"""
+        lines = content.split('\n')
+        sanitized_lines = []
+
+        for line in lines:
+            if '=' in line and any(secret in line.lower() for secret in ['password', 'webpassword', 'key']):
+                key_part = line.split('=', 1)[0]
+                sanitized_lines.append(f"{key_part}=REDACTED")
+            else:
+                sanitized_lines.append(line)
+
+        return '\n'.join(sanitized_lines)
+
+    def _save_service_configs(self, collected_configs: Dict) -> Dict[str, List[str]]:
+        """Save collected configurations to infrastructure-docs/services/"""
+        self.services_output_dir.mkdir(parents=True, exist_ok=True)
+        saved_configs = {}
+
+        for service_key, service_data in collected_configs.items():
+            service_type = service_data['service_type']
+            container_name = service_data['container_name']
+            configs = service_data['configs']
+
+            # Create service directory
+            service_dir = self.services_output_dir / service_type / container_name
+            service_dir.mkdir(parents=True, exist_ok=True)
+
+            saved_files = []
+
+            # Save each config file
+            for filename, content in configs.items():
+                file_path = service_dir / filename
+
+                try:
+                    with open(file_path, 'w') as f:
+                        f.write(content)
+                    saved_files.append(str(file_path))
+                    self.logger.debug(f"Saved {filename}")
+                except Exception as e:
+                    self.logger.error(f"Failed to save {filename}: {e}")
+
+            # Create metadata file
+            metadata = {
+                'service_type': service_type,
+                'container_name': container_name,
+                'image': service_data['image'],
+                'collected_at': service_data['collected_at'],
+                'config_files': list(configs.keys()),
+                'collection_host': self.host,
+                'notes': f"Auto-collected from {container_name} container on {self.host}"
+            }
+
+            metadata_path = service_dir / 'collection_metadata.yml'
+            with open(metadata_path, 'w') as f:
+                yaml.dump(metadata, f, default_flow_style=False, indent=2)
+            saved_files.append(str(metadata_path))
+
+            saved_configs[service_key] = saved_files
+            self.logger.info(f"Saved {len(configs)} configs for {service_type}/{container_name}")
+
+        return saved_configs
