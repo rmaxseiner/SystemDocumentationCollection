@@ -113,11 +113,7 @@ class DockerCollector(SystemStateCollector):
 
             # Collect service configurations if enabled
             service_configs = {}
-            if self.collect_services:
-                print(f"DEBUG: Service collection enabled for {self.name}")
-                service_configs = self._collect_service_configurations(containers_data)
-            else:
-                print(f"DEBUG: Service collection disabled for {self.name}")
+            service_configs = self._collect_service_configurations(containers_data)
 
             self.ssh_connector.disconnect()
 
@@ -240,46 +236,87 @@ class DockerCollector(SystemStateCollector):
 
     def _get_containers_via_ssh(self) -> List[Dict]:
         """Get container information via SSH docker commands"""
+        containers = []
         try:
+
+            self.logger.debug(f"Starting container collection via SSH for {self.host}")
+
             # Get container list
             result = self.ssh_connector.execute_command("docker ps -a --format json")
+            self.logger.debug(f"Container list command result: success={result.success}")
+
             if not result.success:
                 self.logger.error(f"Failed to get container list: {result.error}")
                 return []
 
-            containers = []
+            if not result.output.strip():
+                self.logger.warning("No container output received")
+                return []
+
+            lines = result.output.strip().split('\n')
+            self.logger.debug(f"Processing {len(lines)} container lines")
+
             for line in result.output.strip().split('\n'):
-                if line.strip():
-                    try:
-                        container_basic = json.loads(line)
+                if not line.strip():  # Skip empty lines
+                    continue
 
-                        # Get detailed info for each container
-                        detail_result = self.ssh_connector.execute_command(
-                            f"docker inspect {container_basic['ID']}"
-                        )
+                try:
+                    container_basic = json.loads(line)
+                    if not isinstance(container_basic, dict):  # Validate JSON structure
+                        self.logger.warning(f"Invalid container JSON structure: {line[:100]}")
+                        continue
 
-                        if detail_result.success:
-                            container_details = json.loads(detail_result.output)[0]
+                    # Get detailed info for each container
+                    container_id = container_basic.get('ID')
+                    if not container_id:
+                        self.logger.warning(f"Container missing ID: {container_basic}")
+                        continue
 
+                    detail_result = self.ssh_connector.execute_command(
+                        f"docker inspect {container_id}"
+                    )
+
+                    if detail_result.success and detail_result.output.strip():
+                        try:
+                            container_details_list = json.loads(detail_result.output)
+                            if not isinstance(container_details_list, list) or len(container_details_list) == 0:
+                                self.logger.warning(f"Invalid inspect output for {container_id}")
+                                continue
+
+                            container_details = container_details_list[0]
+                            if not isinstance(container_details, dict):
+                                self.logger.warning(f"Invalid container details structure for {container_id}")
+                                continue
+
+                            # Build container info safely
                             container_info = {
-                                'id': container_details['Id'],
-                                'name': container_details['Name'].lstrip('/'),
-                                'image': container_details['Config']['Image'],
-                                'status': container_details['State']['Status'],
-                                'state': container_details['State'],
-                                'created': container_details['Created'],
+                                'id': container_details.get('Id', container_id),
+                                'name': container_details.get('Name', '').lstrip('/'),
+                                'image': container_details.get('Config', {}).get('Image', 'unknown'),
+                                'status': container_details.get('State', {}).get('Status', 'unknown'),
+                                'state': container_details.get('State', {}),
+                                'created': container_details.get('Created', ''),
                                 'ports': self._parse_ports_from_inspect(container_details),
-                                'mounts': self._format_mounts(container_details['Mounts']),
-                                'environment': container_details['Config']['Env'],
-                                'labels': container_details['Config']['Labels'] or {},
-                                'networks': list(container_details['NetworkSettings']['Networks'].keys()),
-                                'restart_policy': container_details['HostConfig']['RestartPolicy']
+                                'mounts': self._format_mounts(container_details.get('Mounts', [])),
+                                'environment': container_details.get('Config', {}).get('Env', []),
+                                'labels': container_details.get('Config', {}).get('Labels') or {},
+                                'networks': list(
+                                    container_details.get('NetworkSettings', {}).get('Networks', {}).keys()),
+                                'restart_policy': container_details.get('HostConfig', {}).get('RestartPolicy', {})
                             }
                             containers.append(container_info)
 
-                    except json.JSONDecodeError as e:
-                        self.logger.warning(f"Failed to parse container JSON: {e}")
+                        except json.JSONDecodeError as e:
+                            self.logger.warning(f"Failed to parse inspect JSON for {container_id}: {e}")
+                            continue
+                    else:
+                        self.logger.warning(f"Failed to get details for container {container_id}")
                         continue
+
+                except json.JSONDecodeError as e:
+                    self.logger.warning(f"Failed to parse container JSON: {e}")
+                    self.logger.debug(f"Problematic line: {line[:200]}...")
+                    continue
 
             return containers
 
@@ -396,19 +433,35 @@ class DockerCollector(SystemStateCollector):
         """Parse port information from container inspect output"""
         ports = {}
 
-        port_bindings = container_details.get('HostConfig', {}).get('PortBindings', {})
-        exposed_ports = container_details.get('Config', {}).get('ExposedPorts', {})
+        # Safely get port bindings
+        host_config = container_details.get('HostConfig', {})
+        if not isinstance(host_config, dict):
+            return ports
+
+        port_bindings = host_config.get('PortBindings', {})
+        if not isinstance(port_bindings, dict):
+            port_bindings = {}
+
+        # Safely get exposed ports
+        config = container_details.get('Config', {})
+        if not isinstance(config, dict):
+            config = {}
+
+        exposed_ports = config.get('ExposedPorts', {})
+        if not isinstance(exposed_ports, dict):
+            exposed_ports = {}
 
         # Combine port binding and exposed port information
         for container_port, host_bindings in port_bindings.items():
-            if host_bindings:
+            if host_bindings and isinstance(host_bindings, list):
                 for binding in host_bindings:
-                    ports[container_port] = [
-                        {
-                            'HostIp': binding.get('HostIp', ''),
-                            'HostPort': binding.get('HostPort', '')
-                        }
-                    ]
+                    if isinstance(binding, dict):
+                        ports[container_port] = [
+                            {
+                                'HostIp': binding.get('HostIp', ''),
+                                'HostPort': binding.get('HostPort', '')
+                            }
+                        ]
 
         # Add exposed ports that aren't bound
         for exposed_port in exposed_ports.keys():

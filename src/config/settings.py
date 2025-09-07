@@ -7,7 +7,7 @@ import os
 import yaml
 from pathlib import Path
 from typing import Dict, List, Any, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 
 
@@ -67,6 +67,53 @@ class ServiceCollectionConfig:
 
 
 @dataclass
+class RAGProcessingConfig:
+    """RAG data extraction and processing configuration"""
+    enabled: bool = True
+    output_directory: str = "rag_output"
+    save_intermediate: bool = True
+    parallel_processing: bool = True
+    max_workers: int = 4
+    
+    # LLM Configuration
+    llm: Dict[str, Any] = field(default_factory=lambda: {
+        'type': 'local',  # 'openai', 'local'
+        'model': 'llama3.2',
+        'batch_size': 5,
+        'max_tokens': 150,
+        'temperature': 0.1,
+        'timeout': 30
+    })
+    
+    # Processor-specific configurations
+    container_processor: Dict[str, Any] = field(default_factory=lambda: {
+        'enabled': True,
+        'enable_llm_tagging': True,
+        'cleaning_rules': {
+            'container': {'custom_temporal_field_1', 'custom_temporal_field_2'}
+        },
+        'metadata_config': {},
+        'assembly_config': {}
+    })
+    
+    host_processor: Dict[str, Any] = field(default_factory=lambda: {
+        'enabled': True,
+        'enable_llm_tagging': True,
+        'cleaning_rules': {
+            'host': {'custom_host_field_1', 'custom_host_field_2'}
+        }
+    })
+    
+    service_processor: Dict[str, Any] = field(default_factory=lambda: {
+        'enabled': True,
+        'enable_llm_tagging': True,
+        'cleaning_rules': {
+            'service': {'custom_service_field_1', 'custom_service_field_2'}
+        }
+    })
+
+
+@dataclass 
 class GitConfig:
     """Git repository configuration"""
     local_remote_name: str = 'gitea'
@@ -104,6 +151,7 @@ class ConfigManager:
         self.service_collection = ServiceCollectionConfig()
         self.git_config = GitConfig()
         self.collection_config = CollectionConfig()
+        self.rag_processing = RAGProcessingConfig()
 
         self._load_config()
 
@@ -203,10 +251,7 @@ class ConfigManager:
             with open(self.config_file, 'r') as f:
                 config_data = yaml.safe_load(f)
 
-            # Load systems configuration
-            self._load_systems_config(config_data.get('systems', []))
-
-            # Load service collection configuration
+            # Load service collection configuration FIRST
             service_data = config_data.get('service_collection', {})
             self.service_collection = ServiceCollectionConfig(**service_data)
 
@@ -217,6 +262,13 @@ class ConfigManager:
             # Load collection configuration
             collection_data = config_data.get('collection', {})
             self.collection_config = CollectionConfig(**collection_data)
+
+            # Load RAG processing configuration
+            rag_data = config_data.get('rag_processing', {})
+            self.rag_processing = RAGProcessingConfig(**rag_data)
+
+            # NOW load systems configuration (which depends on service_collection)
+            self._load_systems_config(config_data.get('systems', []))
 
             # Store sanitization rules
             self.sanitization_rules = config_data.get('sanitization', {})
@@ -238,12 +290,14 @@ class ConfigManager:
                     env_var = system_data['api_token_env']
                     system_data['api_token'] = os.getenv(env_var)
 
-                # Add service collection settings to Docker systems
+                # Add service collection settings to Docker systems BEFORE creating SystemConfig
                 if system_data.get('type') == 'docker' and system_data.get('collect_services', False):
                     system_data['service_definitions'] = self.service_collection.service_definitions
                     system_data['services_output_dir'] = self.service_collection.output_directory
 
+                # NOW create the SystemConfig object with the updated system_data
                 system_config = SystemConfig(**system_data)
+
                 if system_config.enabled:
                     self.systems.append(system_config)
 
