@@ -6,9 +6,41 @@ Enhanced configuration management with service collection support.
 import os
 import yaml
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Set
 from dataclasses import dataclass, field
 import logging
+
+
+@dataclass
+class TemporalCleaningConfig:
+    """Temporal data cleaning configuration"""
+    default_temporal_fields: List[str] = field(default_factory=list)
+    entity_temporal_fields: Dict[str, List[str]] = field(default_factory=dict)
+    temporal_patterns: List[str] = field(default_factory=list)
+    entity_aliases: Dict[str, List[str]] = field(default_factory=dict)
+
+    def get_fields_for_entity(self, entity_type: str) -> Set[str]:
+        """Get all temporal fields for a specific entity type"""
+        # Start with default fields
+        fields = set(self.default_temporal_fields)
+
+        # Normalize entity type (lowercase)
+        entity_type_lower = entity_type.lower()
+
+        # Check for direct match
+        if entity_type_lower in self.entity_temporal_fields:
+            fields.update(self.entity_temporal_fields[entity_type_lower])
+            return fields
+
+        # Check aliases
+        for canonical_type, aliases in self.entity_aliases.items():
+            if entity_type_lower in [alias.lower() for alias in aliases]:
+                if canonical_type in self.entity_temporal_fields:
+                    fields.update(self.entity_temporal_fields[canonical_type])
+                return fields
+
+        # If no specific fields found, return just defaults
+        return fields
 
 
 @dataclass
@@ -152,6 +184,7 @@ class ConfigManager:
         self.git_config = GitConfig()
         self.collection_config = CollectionConfig()
         self.rag_processing = RAGProcessingConfig()
+        self.temporal_cleaning = TemporalCleaningConfig()  # Add this line
 
         self._load_config()
 
@@ -267,6 +300,9 @@ class ConfigManager:
             rag_data = config_data.get('rag_processing', {})
             self.rag_processing = RAGProcessingConfig(**rag_data)
 
+            # Load temporal cleaning configuration
+            self._load_temporal_cleaning_config()  # Add this line
+
             # NOW load systems configuration (which depends on service_collection)
             self._load_systems_config(config_data.get('systems', []))
 
@@ -278,6 +314,45 @@ class ConfigManager:
         except Exception as e:
             self.logger.error(f"Failed to load configuration: {e}")
             raise
+
+    def _load_temporal_cleaning_config(self):
+        """Load temporal cleaning configuration from separate file"""
+        try:
+            # Look for temporal_cleaning.yml in same directory as main config
+            temporal_config_file = self.config_file.parent / 'temporal_cleaning.yml'
+
+            # Fallback locations
+            if not temporal_config_file.exists():
+                fallback_locations = [
+                    Path('src/config/temporal_cleaning.yml'),
+                    Path('config/temporal_cleaning.yml'),
+                    Path('temporal_cleaning.yml')
+                ]
+
+                for location in fallback_locations:
+                    if location.exists():
+                        temporal_config_file = location
+                        break
+                else:
+                    self.logger.warning("Temporal cleaning config not found, using defaults")
+                    return
+
+            with open(temporal_config_file, 'r') as f:
+                temporal_data = yaml.safe_load(f)
+
+            self.temporal_cleaning = TemporalCleaningConfig(
+                default_temporal_fields=temporal_data.get('default_temporal_fields', []),
+                entity_temporal_fields=temporal_data.get('entity_temporal_fields', {}),
+                temporal_patterns=temporal_data.get('temporal_patterns', []),
+                entity_aliases=temporal_data.get('entity_aliases', {})
+            )
+
+            self.logger.info(f"Loaded temporal cleaning config from {temporal_config_file}")
+
+        except Exception as e:
+            self.logger.warning(f"Failed to load temporal cleaning config: {e}, using defaults")
+            self.temporal_cleaning = TemporalCleaningConfig()
+
 
     def _load_systems_config(self, systems_data: List[Dict]):
         """Load systems configuration with service collection support"""

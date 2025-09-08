@@ -10,7 +10,8 @@ import argparse
 from pathlib import Path
 import json
 from datetime import datetime
-from typing import Dict, Any
+
+from src.processors import ContainerProcessor
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
@@ -145,7 +146,7 @@ class InfrastructurePipeline:
 
     def run_processing_phase(self):
         """Run the data processing phase"""
-        print("\\n🔍 Starting Infrastructure Data Processing Phase")
+        print("\n🔍 Starting Infrastructure Data Processing Phase")
         print("=" * 80)
 
         self.logger.info("Processing phase started")
@@ -155,6 +156,55 @@ class InfrastructurePipeline:
             print("⚠️  No collection results available for processing")
             return False
 
+        # Check if RAG processing is enabled
+        if self.config.rag_processing.enabled:
+            return self._run_rag_processing()
+        else:
+            return self._run_legacy_processing()
+
+    def _run_rag_processing(self):
+        """Run the new RAG processing pipeline"""
+        print("🤖 Running RAG Processing Pipeline")
+
+        # Initialize container processor with global config
+        container_config = self.config.rag_processing.container_processor
+        container_processor = ContainerProcessor(
+            'containers',
+            {
+                'cleaning_rules': getattr(container_config, 'cleaning_rules', {}),
+                'enable_llm_tagging': getattr(container_config, 'enable_llm_tagging', True),
+                'llm': self.config.rag_processing.llm,
+                'output_dir': self.config.rag_processing.output_directory,
+                'save_intermediate': self.config.rag_processing.save_intermediate,
+                'parallel_processing': self.config.rag_processing.parallel_processing,
+                'max_workers': self.config.rag_processing.max_workers
+            },
+            global_config=self.config
+        )
+
+        try:
+            # Process the collected data
+            result = container_processor.process(self.collection_results)
+
+            if result.success:
+                print(f"✅ RAG processing successful")
+                print(f"💾 Results saved to: {result.data.get('output_directory', 'rag_output')}")
+                print(f"📊 Entities processed: {result.data.get('entities_count', 0)}")
+
+                self.logger.info("RAG processing phase completed successfully")
+                return True
+            else:
+                print(f"❌ RAG processing failed: {result.error}")
+                self.logger.error(f"RAG processing failed: {result.error}")
+                return False
+
+        except Exception as e:
+            self.logger.exception("RAG processing phase failed with exception")
+            print(f"❌ RAG processing failed: {str(e)}")
+            return False
+
+    def _run_legacy_processing(self):
+        """Run the legacy processing (existing analyzer)"""
         # Create processor configuration
         processor_config = {
             'data_dir': 'collected_data',
@@ -168,13 +218,12 @@ class InfrastructurePipeline:
         try:
             # Process the collected data
             result = processor.process(self.collection_results)
-            self.processing_results['legacy_analyzer'] = result
 
             if result.success:
                 print(f"✅ Processing successful")
                 print(f"💾 Analysis saved to: {result.data.get('output_directory', 'analysis_output')}")
                 print(f"📊 Systems analyzed: {result.data.get('systems_analyzed', 0)}")
-                
+
                 self.logger.info("Processing phase completed successfully")
                 return True
             else:

@@ -9,9 +9,9 @@ Container RAG processor implementing the 4-step RAG data extraction pipeline:
 
 import json
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import logging
+
 
 from .base_processor import BaseProcessor, ProcessingResult
 from ..utils.rag_utils import TemporalDataCleaner, MetadataExtractor, RAGDataAssembler
@@ -22,34 +22,36 @@ class ContainerProcessor(BaseProcessor):
     """
     Processes Docker container data through the complete RAG extraction pipeline.
     Handles parallel processing and configurable LLM integration.
+    Uses configuration-based temporal data cleaning.
     """
-    
-    def __init__(self, name: str, config: Dict[str, Any]):
+
+    def __init__(self, name: str, config: Dict[str, Any], global_config=None):
         super().__init__(name, config)
-        
-        # Initialize processing components
-        self.cleaner = TemporalDataCleaner(
-            custom_rules=config.get('cleaning_rules', {})
-        )
+
+        # Store reference to global config for temporal cleaning
+        self.global_config = global_config
+
+        # Initialize processing components with configuration
+        self.cleaner = self._create_temporal_cleaner(config.get('cleaning_rules', {}))
         self.metadata_extractor = MetadataExtractor(
             config=config.get('metadata_config', {})
         )
         self.assembler = RAGDataAssembler(
             config=config.get('assembly_config', {})
         )
-        
-        # LLM configuration
+
+        # LLM configuration (unchanged)
         self.llm_config = config.get('llm', {})
         self.llm_client = None
         self.enable_llm_tagging = config.get('enable_llm_tagging', True)
         self.parallel_processing = config.get('parallel_processing', True)
         self.max_workers = config.get('max_workers', 4)
-        
-        # Output configuration
+
+        # Output configuration (unchanged)
         self.output_dir = Path(config.get('output_dir', 'rag_output'))
         self.save_intermediate = config.get('save_intermediate', True)
-        
-        # Initialize LLM client if enabled
+
+        # Initialize LLM client if enabled (unchanged)
         if self.enable_llm_tagging and self.llm_config:
             try:
                 self.llm_client = create_llm_client(self.llm_config)
@@ -57,6 +59,28 @@ class ContainerProcessor(BaseProcessor):
             except Exception as e:
                 self.logger.error(f"Failed to initialize LLM client: {e}")
                 self.llm_client = None
+
+    def _create_temporal_cleaner(self, custom_rules: Dict[str, Set[str]]) -> TemporalDataCleaner:
+        """Create temporal data cleaner with configuration"""
+        try:
+            # Get temporal cleaning config from global config
+            temporal_config = None
+            if self.global_config and hasattr(self.global_config, 'temporal_cleaning'):
+                temporal_config = self.global_config.temporal_cleaning
+                self.logger.info("Using configured temporal cleaning rules")
+            else:
+                self.logger.warning("No global temporal config available, using fallback")
+
+            # Create cleaner with config and custom rules
+            return TemporalDataCleaner(
+                temporal_config=temporal_config,
+                custom_rules=custom_rules
+            )
+
+        except Exception as e:
+            self.logger.error(f"Failed to create temporal cleaner with config: {e}")
+            # Fallback to basic cleaner
+            return TemporalDataCleaner(custom_rules=custom_rules)
     
     def validate_config(self) -> bool:
         """Validate processor configuration"""
@@ -300,11 +324,11 @@ class ContainerProcessor(BaseProcessor):
         except Exception as e:
             self.logger.error(f"Error in semantic tagging for {entity_id}: {e}")
             return self._generate_fallback_tags(cleaned_data)
-    
+
     def _create_llm_content(self, cleaned_data: Dict[str, Any]) -> str:
         """Create content string for LLM analysis"""
         content_parts = []
-        
+
         # Basic container info
         if 'name' in cleaned_data:
             content_parts.append(f"Container name: {cleaned_data['name']}")
@@ -312,12 +336,24 @@ class ContainerProcessor(BaseProcessor):
             content_parts.append(f"Docker image: {cleaned_data['image']}")
         if 'command' in cleaned_data:
             content_parts.append(f"Command: {cleaned_data['command']}")
-        
-        # Environment variables (key names only for privacy)
+
+        # Environment variables (handle list format from Docker)
         if 'environment' in cleaned_data and cleaned_data['environment']:
-            env_keys = list(cleaned_data['environment'].keys())[:10]  # First 10 keys
-            content_parts.append(f"Environment variables: {', '.join(env_keys)}")
-        
+            env_data = cleaned_data['environment']
+            if isinstance(env_data, list):
+                # Extract keys from "KEY=value" format
+                env_keys = []
+                for env_item in env_data[:10]:  # First 10 items
+                    if isinstance(env_item, str) and '=' in env_item:
+                        key = env_item.split('=', 1)[0]
+                        env_keys.append(key)
+                if env_keys:
+                    content_parts.append(f"Environment variables: {', '.join(env_keys)}")
+            elif isinstance(env_data, dict):
+                # Handle dict format (fallback)
+                env_keys = list(env_data.keys())[:10]
+                content_parts.append(f"Environment variables: {', '.join(env_keys)}")
+
         # Labels
         if 'labels' in cleaned_data and cleaned_data['labels']:
             labels = cleaned_data['labels']
@@ -325,18 +361,26 @@ class ContainerProcessor(BaseProcessor):
             for key, value in list(labels.items())[:5]:  # First 5 labels
                 label_info.append(f"{key}={value}")
             content_parts.append(f"Labels: {', '.join(label_info)}")
-        
+
         # Ports
         if 'ports' in cleaned_data and cleaned_data['ports']:
             ports = list(cleaned_data['ports'].keys())
             content_parts.append(f"Exposed ports: {', '.join(ports)}")
-        
-        # Volumes
+
+        # Networks (handle list format)
+        if 'networks' in cleaned_data and cleaned_data['networks']:
+            networks = cleaned_data['networks']
+            if isinstance(networks, list):
+                content_parts.append(f"Networks: {', '.join(networks)}")
+            elif isinstance(networks, dict):
+                content_parts.append(f"Networks: {', '.join(networks.keys())}")
+
+        # Volumes/Mounts
         if 'mounts' in cleaned_data and cleaned_data['mounts']:
             mount_types = [mount.get('type', 'unknown') for mount in cleaned_data['mounts']]
             content_parts.append(f"Mount types: {', '.join(set(mount_types))}")
-        
-        return "\\n".join(content_parts)
+
+        return "\n".join(content_parts)
     
     def _generate_fallback_tags(self, cleaned_data: Dict[str, Any]) -> Dict[str, str]:
         """Generate fallback tags using rule-based approach"""
