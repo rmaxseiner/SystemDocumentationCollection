@@ -5,7 +5,7 @@ Provides common functionality for cleaning, metadata extraction, and data assemb
 """
 
 import re
-from typing import Dict, List, Any, Optional, Set
+from typing import Dict, List, Any, Optional, Set, Union
 from datetime import datetime
 import logging
 
@@ -449,24 +449,24 @@ class RAGDataAssembler:
     def __init__(self, config: Dict[str, Any] = None):
         self.config = config or {}
         self.logger = logging.getLogger('rag_utils.assembler')
-    
-    def assemble_rag_entity(self, 
-                           entity_id: str,
-                           entity_type: str, 
-                           cleaned_data: Dict[str, Any],
-                           metadata: Dict[str, Any],
-                           tags: Dict[str, str]) -> Dict[str, Any]:
+
+    def assemble_rag_entity(self,
+                            entity_id: str,
+                            entity_type: str,
+                            cleaned_data: Dict[str, Any],
+                            metadata: Dict[str, Any],
+                            tags: Union[Dict[str, str], List[str]]) -> Dict[str, Any]:
         """Assemble final RAG entity structure"""
-        
+
         # Generate human-readable title
         title = self._generate_title(entity_id, entity_type, metadata, tags)
-        
+
         # Generate detailed content description
         content = self._generate_content(entity_id, entity_type, cleaned_data, metadata, tags)
-        
+
         # Prepare final tags (combination of semantic tags and metadata)
         final_tags = self._prepare_tags(tags, metadata)
-        
+
         rag_entity = {
             'id': entity_id,
             'type': entity_type,
@@ -480,7 +480,7 @@ class RAGDataAssembler:
             },
             'tags': final_tags
         }
-        
+
         return rag_entity
     
     def _generate_title(self, entity_id: str, entity_type: str, metadata: Dict, tags: Dict) -> str:
@@ -613,21 +613,26 @@ class RAGDataAssembler:
                 summary_parts.append(f"uses {len(data['volumes'])} volumes")
         
         return ", ".join(summary_parts) if summary_parts else "minimal configuration"
-    
-    def _prepare_tags(self, llm_tags: Dict[str, str], metadata: Dict) -> List[str]:
+
+    def _prepare_tags(self, llm_tags: Union[Dict[str, str], List[str]], metadata: Dict) -> List[str]:
         """Combine LLM tags with metadata-derived tags"""
         all_tags = []
-        
-        # Add LLM semantic tags
-        for category, tag in llm_tags.items():
-            if tag and tag.lower() != 'none':
-                all_tags.append(tag.lower())
-        
+
+        # Add LLM semantic tags (handle both dict and list formats)
+        if isinstance(llm_tags, dict):
+            for category, tag in llm_tags.items():
+                if tag and tag.lower() != 'none':
+                    all_tags.append(tag.lower())
+        elif isinstance(llm_tags, list):
+            for tag in llm_tags:
+                if tag and tag.lower() != 'none':
+                    all_tags.append(tag.lower())
+
         # Add entity type
         entity_type = metadata.get('entity_type')
         if entity_type:
             all_tags.append(entity_type)
-        
+
         # Add technology tags from properties
         properties = metadata.get('properties', {})
         if 'image' in properties:
@@ -636,7 +641,7 @@ class RAGDataAssembler:
             if '/' in image:
                 tech = image.split('/')[-1].split(':')[0]
                 all_tags.append(tech.lower())
-        
+
         # Remove duplicates and return
         return list(set(all_tags))
     

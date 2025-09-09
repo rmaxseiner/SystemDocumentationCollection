@@ -12,6 +12,7 @@ import json
 from datetime import datetime
 
 from src.processors import ContainerProcessor
+from src.processors.manual_docs_processor import ManualDocsProcessor
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
@@ -151,10 +152,18 @@ class InfrastructurePipeline:
 
         self.logger.info("Processing phase started")
 
+        # If no collection results, try to load from disk
         if not self.collection_results:
-            self.logger.warning("No collection results available for processing")
-            print("⚠️  No collection results available for processing")
-            return False
+            self.logger.info("No collection results in memory, loading from disk")
+            print("📂 Loading latest collection data from disk...")
+
+            if not self._load_latest_collection_data():
+                self.logger.error("Failed to load collection data")
+                print("❌ Failed to load collection data from disk")
+                print("💡 Run collection first or check that collected_data/ directory exists")
+                return False
+
+            print(f"✅ Loaded data for {len(self.collection_results)} systems")
 
         # Check if RAG processing is enabled
         if self.config.rag_processing.enabled:
@@ -166,41 +175,71 @@ class InfrastructurePipeline:
         """Run the new RAG processing pipeline"""
         print("🤖 Running RAG Processing Pipeline")
 
-        # Initialize container processor with global config
-        container_config = self.config.rag_processing.container_processor
-        container_processor = ContainerProcessor(
-            'containers',
-            {
-                'cleaning_rules': getattr(container_config, 'cleaning_rules', {}),
-                'enable_llm_tagging': getattr(container_config, 'enable_llm_tagging', True),
-                'llm': self.config.rag_processing.llm,
-                'output_dir': self.config.rag_processing.output_directory,
-                'save_intermediate': self.config.rag_processing.save_intermediate,
-                'parallel_processing': self.config.rag_processing.parallel_processing,
-                'max_workers': self.config.rag_processing.max_workers
-            },
-            global_config=self.config
-        )
+        success_results = []
 
-        try:
-            # Process the collected data
-            result = container_processor.process(self.collection_results)
+        # Run Container Processor
+        if self.config.rag_processing.container_processor['enabled']:
+            print("\n📦 Processing Containers...")
+            container_config = self.config.rag_processing.container_processor
+            container_processor = ContainerProcessor(
+                'containers',
+                {
+                    'cleaning_rules': container_config.get('cleaning_rules', {}),
+                    'enable_llm_tagging': container_config.get('enable_llm_tagging', True),
+                    'llm': self.config.rag_processing.llm,  # Remove .__dict__
+                    'output_dir': self.config.rag_processing.output_directory,
+                    'save_intermediate': self.config.rag_processing.save_intermediate,
+                    'parallel_processing': self.config.rag_processing.parallel_processing,
+                    'max_workers': self.config.rag_processing.max_workers
+                }
+            )
 
-            if result.success:
-                print(f"✅ RAG processing successful")
-                print(f"💾 Results saved to: {result.data.get('output_directory', 'rag_output')}")
-                print(f"📊 Entities processed: {result.data.get('entities_count', 0)}")
+            try:
+                result = container_processor.process(self.collection_results)
+                if result.success:
+                    print(f"✅ Container processing successful")
+                    success_results.append('containers')
+                else:
+                    print(f"❌ Container processing failed: {result.error}")
+            except Exception as e:
+                print(f"❌ Container processing failed: {str(e)}")
 
-                self.logger.info("RAG processing phase completed successfully")
-                return True
-            else:
-                print(f"❌ RAG processing failed: {result.error}")
-                self.logger.error(f"RAG processing failed: {result.error}")
-                return False
+        # Run Manual Documentation Processor
+        if self.config.rag_processing.manual_docs_processor['enabled']:
+            print("\n📚 Processing Manual Documentation...")
+            manual_docs_config = self.config.rag_processing.manual_docs_processor
+            manual_processor = ManualDocsProcessor(
+                'manual_docs',
+                {
+                    'manual_docs_dir': manual_docs_config.get('manual_docs_dir', 'infrastructure-docs/manual'),
+                    'output_dir': self.config.rag_processing.output_directory,
+                    'validate_schema': manual_docs_config.get('validate_schema', True),
+                    'create_entities': manual_docs_config.get('create_entities', True)
+                }
+            )
 
-        except Exception as e:
-            self.logger.exception("RAG processing phase failed with exception")
-            print(f"❌ RAG processing failed: {str(e)}")
+            try:
+                # Manual docs don't need collection_results
+                result = manual_processor.process()
+                if result.success:
+                    print(f"✅ Manual documentation processing successful")
+                    print(f"📄 Documents processed: {result.data.get('documents_generated', 0)}")
+                    success_results.append('manual_docs')
+                else:
+                    print(f"❌ Manual documentation processing failed: {result.error}")
+            except Exception as e:
+                print(f"❌ Manual documentation processing failed: {str(e)}")
+
+        # Summary
+        print(f"\n🎯 RAG Processing Summary:")
+        print(f"   📦 Container processing: {'✅' if 'containers' in success_results else '❌'}")
+        print(f"   📚 Manual docs processing: {'✅' if 'manual_docs' in success_results else '❌'}")
+
+        if success_results:
+            print(f"💾 Results saved to: {self.config.rag_processing.output_directory}")
+            return True
+        else:
+            print("❌ All processing failed")
             return False
 
     def _run_legacy_processing(self):
@@ -369,6 +408,72 @@ class InfrastructurePipeline:
         else:
             print("All validation checks passed!")
             return True
+
+    def _load_latest_collection_data(self) -> bool:
+        """Load the latest collection data from disk for processing-only runs"""
+        self.logger.info("Loading latest collection data from disk")
+
+        output_dir = Path('collected_data')
+        if not output_dir.exists():
+            self.logger.error("Collection data directory not found")
+            return False
+
+        # Find latest file for each system type
+        system_files = {}
+
+        for json_file in output_dir.glob("*.json"):
+            try:
+                # Extract system name and timestamp from filename
+                # Format: {system_name}_{system_type}_{timestamp}.json
+                parts = json_file.stem.split('_')
+                if len(parts) >= 3:
+                    system_name = parts[0]
+                    # Use file modification time as fallback for sorting
+                    file_time = json_file.stat().st_mtime
+
+                    if system_name not in system_files or file_time > system_files[system_name]['time']:
+                        system_files[system_name] = {
+                            'file': json_file,
+                            'time': file_time
+                        }
+            except Exception as e:
+                self.logger.warning(f"Skipping file {json_file}: {e}")
+                continue
+
+        if not system_files:
+            self.logger.error("No collection data files found")
+            return False
+
+        # Load the latest file for each system
+        loaded_count = 0
+        for system_name, file_info in system_files.items():
+            json_file = file_info['file']
+            try:
+                with open(json_file, 'r') as f:
+                    data = json.load(f)
+
+                if data.get('success', False):
+                    # Convert to CollectionResult-like structure for compatibility
+                    from src.collectors.base_collector import CollectionResult
+
+                    result = CollectionResult(
+                        success=data['success'],
+                        data=data.get('data', {}),
+                        error=data.get('error'),
+                        metadata=data.get('metadata', {})
+                    )
+
+                    self.collection_results[system_name] = result
+                    loaded_count += 1
+                    self.logger.info(f"Loaded data for {system_name} from {json_file.name}")
+                else:
+                    self.logger.warning(f"Skipping {system_name}: collection was not successful")
+
+            except Exception as e:
+                self.logger.error(f"Failed to load {json_file}: {e}")
+
+        self.logger.info(f"Loaded collection data for {loaded_count} systems")
+        return loaded_count > 0
 
 
 def main():

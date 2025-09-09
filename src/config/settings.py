@@ -127,6 +127,13 @@ class RAGProcessingConfig:
         'metadata_config': {},
         'assembly_config': {}
     })
+
+    manual_docs_processor: Dict[str, Any] = field(default_factory=lambda: {
+        'enabled': True,
+        'manual_docs_dir': 'infrastructure-docs/manual',
+        'validate_schema': True,
+        'create_entities': True
+    })
     
     host_processor: Dict[str, Any] = field(default_factory=lambda: {
         'enabled': True,
