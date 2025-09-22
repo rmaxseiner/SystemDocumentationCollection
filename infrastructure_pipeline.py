@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Combined Infrastructure Pipeline - Collection and Processing
-Combines the functionality of run_collection.py and analyze_infrastructure.py
 Uses collectors -> processors pattern for better modularity and container compatibility.
 """
 
@@ -9,9 +8,6 @@ import sys
 import argparse
 from pathlib import Path
 import json
-from datetime import datetime
-import glob
-import os
 
 from src.processors import ContainerProcessor, ServerProcessor, StorageProcessor
 from src.processors.manual_docs_processor import ManualDocsProcessor
@@ -24,7 +20,6 @@ from src.config.settings import initialize_config
 from src.collectors.docker_collector import DockerCollector
 from src.collectors.proxmox_collector import ProxmoxCollector
 from src.collectors.system_documentation_collector import SystemDocumentationCollector
-from src.processors.existing_processor import ExistingProcessor
 from src.utils.chroma_utils import create_chromadb_from_rag_data
 
 
@@ -170,11 +165,8 @@ class InfrastructurePipeline:
 
             print(f"✅ Loaded data for {len(self.collection_results)} systems")
 
-        # Check if RAG processing is enabled
-        if self.config.rag_processing.enabled:
-            return self._run_rag_processing()
-        else:
-            return self._run_legacy_processing()
+        return self._run_rag_processing()
+
 
     def _run_rag_processing(self):
         """Run the new RAG processing pipeline"""
@@ -356,39 +348,6 @@ class InfrastructurePipeline:
         except Exception as e:
             print(f"❌ ChromaDB creation failed: {str(e)}")
             self.logger.error(f"ChromaDB creation failed: {str(e)}")
-            return False
-
-    def _run_legacy_processing(self):
-        """Run the legacy processing (existing analyzer)"""
-        # Create processor configuration
-        processor_config = {
-            'data_dir': 'collected_data',
-            'config_dir': 'collected_configs',
-            'output_dir': 'analysis_output'
-        }
-
-        # Initialize processor (using existing processor for now)
-        processor = ExistingProcessor('legacy_analyzer', processor_config)
-
-        try:
-            # Process the collected data
-            result = processor.process(self.collection_results)
-
-            if result.success:
-                print(f"✅ Processing successful")
-                print(f"💾 Analysis saved to: {result.data.get('output_directory', 'analysis_output')}")
-                print(f"📊 Systems analyzed: {result.data.get('systems_analyzed', 0)}")
-
-                self.logger.info("Processing phase completed successfully")
-                return True
-            else:
-                print(f"❌ Processing failed: {result.error}")
-                self.logger.error(f"Processing failed: {result.error}")
-                return False
-
-        except Exception as e:
-            self.logger.exception("Processing phase failed with exception")
-            print(f"❌ Processing failed: {str(e)}")
             return False
 
     def run_full_pipeline(self, collect_services_only=False, collect_system_only=False):
