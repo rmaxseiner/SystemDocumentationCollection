@@ -142,7 +142,19 @@ class RAGProcessingConfig:
             'host': {'custom_host_field_1', 'custom_host_field_2'}
         }
     })
-    
+
+    server_processor: Dict[str, Any] = field(default_factory=lambda: {
+        'enabled': True,
+        'enable_llm_tagging': True,
+        'collected_data_path': 'collected_data'
+    })
+
+    storage_processor: Dict[str, Any] = field(default_factory=lambda: {
+        'enabled': True,
+        'enable_llm_tagging': True,
+        'collected_data_path': 'collected_data'
+    })
+
     service_processor: Dict[str, Any] = field(default_factory=lambda: {
         'enabled': True,
         'enable_llm_tagging': True,

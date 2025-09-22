@@ -9,6 +9,8 @@ import argparse
 from pathlib import Path
 import json
 from datetime import datetime
+import glob
+import os
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
@@ -80,6 +82,9 @@ def run_consolidated_collection(collect_services_only=False, collect_system_only
     output_dir.mkdir(exist_ok=True)
     services_dir.mkdir(exist_ok=True)
 
+    # Clean old collection files at start
+    clean_old_collection_files(output_dir, logger)
+
     # Collect from each system
     results = {}
     total_services = 0
@@ -114,9 +119,8 @@ def run_consolidated_collection(collect_services_only=False, collect_system_only
                 # All collectors save to data directory
                 output_base = output_dir
 
-                # Save to file
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                filename = f"{system.name}_{system.type}_{timestamp}.json"
+                # Save to file (without timestamp)
+                filename = f"{system.name}_{system.type}.json"
                 output_file = output_base / filename
 
                 with open(output_file, 'w') as f:
@@ -274,6 +278,22 @@ def show_collection_status():
     if not any([output_dir.exists(), config_dir.exists(), services_dir.exists()]):
         print("No previous collections found.")
         print("Run: python run_collection.py")
+
+
+def clean_old_collection_files(output_dir, logger):
+    """Clean old timestamped collection files"""
+    try:
+        # Remove all .json files in the collected_data directory
+        json_files = list(output_dir.glob('*.json'))
+        if json_files:
+            logger.info(f"Cleaning {len(json_files)} old collection files")
+            print(f"🧹 Cleaning {len(json_files)} old collection files...")
+            for file_path in json_files:
+                file_path.unlink()
+                logger.debug(f"Removed {file_path}")
+    except Exception as e:
+        logger.error(f"Error cleaning old collection files: {e}")
+        print(f"⚠️ Warning: Error cleaning old files: {e}")
 
 
 def main():

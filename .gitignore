@@ -39,3 +39,5 @@ test_collection.log
 
 /test_rag_output/
 /rag_output/
+/test_venv/
+/CLAUDE.md

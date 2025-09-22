@@ -18,6 +18,7 @@ from datetime import datetime
 from .base_processor import BaseProcessor, ProcessingResult
 from ..utils.rag_utils import TemporalDataCleaner, MetadataExtractor, RAGDataAssembler
 from ..utils.llm_client import create_llm_client, LLMRequest
+from ..utils.content_validator import ContentValidator
 
 
 class ContainerProcessor(BaseProcessor):
@@ -46,6 +47,12 @@ class ContainerProcessor(BaseProcessor):
         self.enable_llm_tagging = config.get('enable_llm_tagging', True)
         self.parallel_processing = config.get('parallel_processing', True)
         self.max_workers = config.get('max_workers', 4)
+
+        # Content validation
+        self.content_validator = ContentValidator(
+            config.get('max_word_count', 400),
+            config.get('min_content_length', 10)
+        )
 
         # Output configuration
         self.output_dir = Path(config.get('output_dir', 'rag_output'))
@@ -318,6 +325,9 @@ class ContainerProcessor(BaseProcessor):
             },
             "tags": rag_entity.get('tags', [])
         }
+
+        # Validate content length
+        self.content_validator.validate_document(document)
 
         return document
 

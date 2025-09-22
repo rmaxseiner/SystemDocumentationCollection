@@ -12,6 +12,7 @@ import logging
 from datetime import datetime
 
 from .base_processor import BaseProcessor, ProcessingResult
+from ..utils.content_validator import ContentValidator
 
 
 class ManualDocsProcessor(BaseProcessor):
@@ -29,6 +30,12 @@ class ManualDocsProcessor(BaseProcessor):
 
         # Track processed files to avoid duplicates
         self.processed_files = set()
+
+        # Content validation
+        self.content_validator = ContentValidator(
+            config.get('max_word_count', 400),
+            config.get('min_content_length', 10)
+        )
 
     def validate_config(self) -> bool:
         """Validate processor configuration"""
@@ -145,6 +152,9 @@ class ManualDocsProcessor(BaseProcessor):
             # Add processing metadata
             doc_data['metadata']['processed_at'] = datetime.now().isoformat()
             doc_data['metadata']['source_file'] = str(file_path.relative_to(self.manual_docs_dir))
+
+            # Validate content length
+            self.content_validator.validate_document(doc_data)
 
             # Create entity if applicable
             entity = self._extract_entity_from_document(doc_data)

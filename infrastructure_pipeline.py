@@ -10,8 +10,10 @@ import argparse
 from pathlib import Path
 import json
 from datetime import datetime
+import glob
+import os
 
-from src.processors import ContainerProcessor
+from src.processors import ContainerProcessor, ServerProcessor, StorageProcessor
 from src.processors.manual_docs_processor import ManualDocsProcessor
 
 # Add src to path
@@ -23,6 +25,7 @@ from src.collectors.docker_collector import DockerCollector
 from src.collectors.proxmox_collector import ProxmoxCollector
 from src.collectors.system_documentation_collector import SystemDocumentationCollector
 from src.processors.existing_processor import ExistingProcessor
+from src.utils.chroma_utils import create_chromadb_from_rag_data
 
 
 class InfrastructurePipeline:
@@ -89,6 +92,9 @@ class InfrastructurePipeline:
         output_dir.mkdir(exist_ok=True)
         services_dir.mkdir(exist_ok=True)
 
+        # Clean old collection files at start
+        self._clean_old_collection_files(output_dir)
+
         # Collect from each system
         total_services = 0
         total_configs = 0
@@ -115,9 +121,8 @@ class InfrastructurePipeline:
                     self.logger.info(f"{system.name}: Collection successful")
                     print(f"✅ {system.name}: Collection successful")
 
-                    # Save to file
-                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                    filename = f"{system.name}_{system.type}_{timestamp}.json"
+                    # Save to file (without timestamp)
+                    filename = f"{system.name}_{system.type}.json"
                     output_file = output_dir / filename
 
                     with open(output_file, 'w') as f:
@@ -204,6 +209,60 @@ class InfrastructurePipeline:
             except Exception as e:
                 print(f"❌ Container processing failed: {str(e)}")
 
+        # Run Server Processor
+        if self.config.rag_processing.server_processor['enabled']:
+            print("\n🖥️ Processing Server Hardware Documentation...")
+            server_config = self.config.rag_processing.server_processor
+            server_processor = ServerProcessor(
+                'servers',
+                {
+                    'collected_data_path': server_config.get('collected_data_path', 'collected_data'),
+                    'output_path': self.config.rag_processing.output_directory,
+                    'llm': self.config.rag_processing.llm,
+                    'enable_llm_tagging': server_config.get('enable_llm_tagging', True),
+                    'max_word_count': server_config.get('max_word_count', 400),
+                    'min_content_length': server_config.get('min_content_length', 10)
+                }
+            )
+
+            try:
+                result = server_processor.process(self.collection_results)
+                if result.success:
+                    print(f"✅ Server processing successful")
+                    print(f"🖥️ Servers processed: {result.metadata.get('processed_servers', 0)}")
+                    success_results.append('servers')
+                else:
+                    print(f"❌ Server processing failed: {result.error}")
+            except Exception as e:
+                print(f"❌ Server processing failed: {str(e)}")
+
+        # Run Storage Processor
+        if self.config.rag_processing.storage_processor.get('enabled', True):
+            print("\n💾 Processing Storage Hardware...")
+            storage_config = self.config.rag_processing.storage_processor
+            storage_processor = StorageProcessor(
+                'storage',
+                {
+                    'collected_data_path': storage_config.get('collected_data_path', 'collected_data'),
+                    'output_path': self.config.rag_processing.output_directory,
+                    'llm': self.config.rag_processing.llm,
+                    'enable_llm_tagging': storage_config.get('enable_llm_tagging', True),
+                    'max_word_count': storage_config.get('max_word_count', 400),
+                    'min_content_length': storage_config.get('min_content_length', 10)
+                }
+            )
+
+            try:
+                result = storage_processor.process(self.collection_results)
+                if result.success:
+                    print(f"✅ Storage processing successful")
+                    print(f"💾 Storage devices processed: {result.metadata.get('processed_storage_devices', 0)}")
+                    success_results.append('storage')
+                else:
+                    print(f"❌ Storage processing failed: {result.error}")
+            except Exception as e:
+                print(f"❌ Storage processing failed: {str(e)}")
+
         # Run Manual Documentation Processor
         if self.config.rag_processing.manual_docs_processor['enabled']:
             print("\n📚 Processing Manual Documentation...")
@@ -233,13 +292,70 @@ class InfrastructurePipeline:
         # Summary
         print(f"\n🎯 RAG Processing Summary:")
         print(f"   📦 Container processing: {'✅' if 'containers' in success_results else '❌'}")
+        print(f"   🖥️ Server processing: {'✅' if 'servers' in success_results else '❌'}")
+        print(f"   💾 Storage processing: {'✅' if 'storage' in success_results else '❌'}")
         print(f"   📚 Manual docs processing: {'✅' if 'manual_docs' in success_results else '❌'}")
+
+        # Create ChromaDB if processing was successful
+        chromadb_success = False
+        if success_results:
+            chromadb_success = self._create_chromadb()
 
         if success_results:
             print(f"💾 Results saved to: {self.config.rag_processing.output_directory}")
+            print(f"   🔍 ChromaDB vector database: {'✅' if chromadb_success else '❌'}")
             return True
         else:
             print("❌ All processing failed")
+            return False
+
+    def _create_chromadb(self):
+        """Create ChromaDB vector database from RAG data"""
+        print("\n🔍 Creating ChromaDB Vector Database...")
+
+        # Path to rag_data.json
+        rag_data_path = Path(self.config.rag_processing.output_directory) / "rag_data.json"
+
+        # Path where ChromaDB should be created
+        chroma_db_path = Path(self.config.rag_processing.output_directory) / "chroma_db"
+
+        try:
+            # Check if rag_data.json exists
+            if not rag_data_path.exists():
+                print(f"❌ ChromaDB creation skipped: rag_data.json not found at {rag_data_path}")
+                self.logger.warning(f"rag_data.json not found at {rag_data_path}")
+                return False
+
+            # Create ChromaDB from RAG data (recreate from scratch)
+            result = create_chromadb_from_rag_data(
+                str(rag_data_path),
+                str(chroma_db_path),
+                recreate=True
+            )
+
+            if result.get('success', False):
+                stats = result.get('collection_stats', {})
+                print(f"✅ ChromaDB created successfully")
+                print(f"   📊 Documents indexed: {stats.get('document_count', 0)}")
+                print(f"   📂 Database path: {chroma_db_path}")
+
+                # Test query result summary
+                test_result = result.get('test_query_result', {})
+                if test_result and not test_result.get('error'):
+                    test_count = test_result.get('results_count', 0)
+                    print(f"   🔍 Test query successful: {test_count} results")
+
+                self.logger.info(f"ChromaDB created successfully with {stats.get('document_count', 0)} documents")
+                return True
+            else:
+                error_msg = result.get('error', 'Unknown error')
+                print(f"❌ ChromaDB creation failed: {error_msg}")
+                self.logger.error(f"ChromaDB creation failed: {error_msg}")
+                return False
+
+        except Exception as e:
+            print(f"❌ ChromaDB creation failed: {str(e)}")
+            self.logger.error(f"ChromaDB creation failed: {str(e)}")
             return False
 
     def _run_legacy_processing(self):
@@ -309,6 +425,21 @@ class InfrastructurePipeline:
         else:
             print("\\n⚠️  Pipeline completed with some failures")
             return False
+
+    def _clean_old_collection_files(self, output_dir):
+        """Clean old timestamped collection files"""
+        try:
+            # Remove all .json files in the collected_data directory
+            json_files = list(output_dir.glob('*.json'))
+            if json_files:
+                self.logger.info(f"Cleaning {len(json_files)} old collection files")
+                print(f"🧹 Cleaning {len(json_files)} old collection files...")
+                for file_path in json_files:
+                    file_path.unlink()
+                    self.logger.debug(f"Removed {file_path}")
+        except Exception as e:
+            self.logger.error(f"Error cleaning old collection files: {e}")
+            print(f"⚠️ Warning: Error cleaning old files: {e}")
 
     def _print_collection_summary(self, system, data):
         """Print summary of collected data"""
@@ -423,10 +554,10 @@ class InfrastructurePipeline:
 
         for json_file in output_dir.glob("*.json"):
             try:
-                # Extract system name and timestamp from filename
-                # Format: {system_name}_{system_type}_{timestamp}.json
+                # Extract system name from filename
+                # Format: {system_name}_{system_type}.json
                 parts = json_file.stem.split('_')
-                if len(parts) >= 3:
+                if len(parts) >= 2:
                     system_name = parts[0]
                     # Use file modification time as fallback for sorting
                     file_time = json_file.stat().st_mtime
