@@ -173,7 +173,8 @@ class StorageProcessor(BaseProcessor):
                 parts = line.split()
                 if 'devices' in parts:
                     device_idx = parts.index('devices')
-                    if device_idx > 0:
+                    # Make sure we're not trying to convert 'Total' to int
+                    if device_idx > 0 and parts[device_idx - 1].isdigit():
                         current_pool['device_count'] = int(parts[device_idx - 1])
             elif 'devid' in line and current_pool is not None:
                 # Extract device information
@@ -401,6 +402,10 @@ class StorageProcessor(BaseProcessor):
                 'filesystems': [k for k in ['btrfs_pools', 'lvm_config', 'zfs_available'] if k in config],
                 'last_updated': datetime.now().isoformat()
             },
+            'relationships': {
+                'serves_host': hostname,
+                'host_type': 'server'
+            },
             'physical_devices': devices,
             'tags': list(set(tags))  # Remove duplicates
         }
@@ -414,7 +419,6 @@ class StorageProcessor(BaseProcessor):
         """Process all storage systems and return storage documents"""
         storage_files = self.find_storage_files()
         storage_documents = []
-        entities = {}
 
         for file_path in storage_files:
             try:
@@ -436,16 +440,6 @@ class StorageProcessor(BaseProcessor):
                 storage_doc = self.create_storage_document(system_data, hostname)
                 storage_documents.append(storage_doc)
 
-                # Create entity for relationships
-                entity_key = f"physical_storage_{hostname}"
-                entities[entity_key] = {
-                    'id': storage_doc['id'],
-                    'type': 'physical_storage',
-                    'hostname': hostname,
-                    'total_capacity_tb': storage_doc['metadata']['total_capacity_tb'],
-                    'device_count': storage_doc['metadata']['total_devices']
-                }
-
                 logger.info(f"Created storage document for {hostname} with {len(devices)} devices")
 
             except Exception as e:
@@ -457,14 +451,13 @@ class StorageProcessor(BaseProcessor):
         # Update rag_data.json with storage documents
         output_path = Path(self.output_path)
         output_path.mkdir(exist_ok=True)
-        rag_data_file = self._update_rag_data_json(storage_documents, entities, output_path)
+        rag_data_file = self._update_rag_data_json(storage_documents, output_path)
 
         return {
-            'documents': storage_documents,
-            'entities': entities
+            'documents': storage_documents
         }
 
-    def _update_rag_data_json(self, documents: List[Dict[str, Any]], entities: Dict[str, Any],
+    def _update_rag_data_json(self, documents: List[Dict[str, Any]],
                               output_path: Path) -> Path:
         """Update rag_data.json with storage documents"""
         rag_data_file = output_path / 'rag_data.json'
@@ -492,9 +485,37 @@ class StorageProcessor(BaseProcessor):
         if removed_count > 0:
             logger.info(f"Removed {removed_count} existing storage documents")
 
+        # Remove existing storage relationships
+        original_rel_count = len(rag_data.get('relationships', []))
+        rag_data['relationships'] = [
+            rel for rel in rag_data.get('relationships', [])
+            if not (rel.get('source_type') == 'physical_storage' and rel.get('type') == 'serves_host')
+        ]
+        removed_rel_count = original_rel_count - len(rag_data['relationships'])
+        if removed_rel_count > 0:
+            logger.info(f"Removed {removed_rel_count} existing storage relationships")
+
         # Add new storage documents
         rag_data['documents'].extend(documents)
         logger.info(f"Added {len(documents)} new storage documents")
+
+        # Add storage relationships to global relationships array
+        for doc in documents:
+            if 'relationships' in doc and 'serves_host' in doc['relationships']:
+                relationship = {
+                    'id': f"storage_serves_{doc['relationships']['serves_host']}",
+                    'type': 'serves_host',
+                    'source_id': doc['id'],
+                    'source_type': 'physical_storage',
+                    'target_id': doc['relationships']['serves_host'],
+                    'target_type': 'server',
+                    'metadata': {
+                        'relationship_type': 'storage_assignment',
+                        'description': f"Storage {doc['id']} serves host {doc['relationships']['serves_host']}"
+                    }
+                }
+                rag_data['relationships'].append(relationship)
+        logger.info(f"Added {len(documents)} storage relationships to global relationships array")
 
         # Update metadata
         rag_data['metadata']['export_timestamp'] = datetime.now().isoformat()

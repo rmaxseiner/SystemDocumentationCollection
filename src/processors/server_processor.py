@@ -77,10 +77,33 @@ class ServerProcessor(BaseProcessor):
             logger.error(f"Error parsing server data from {file_path}: {e}")
             return None
 
+    def calculate_total_storage(self, storage_devices: List[Dict]) -> float:
+        """Calculate total storage from physical devices in GB"""
+        total_gb = 0.0
+
+        for device in storage_devices:
+            size_str = device.get('size', '0')
+            # Parse sizes like "931.5G", "1T", "500M"
+            if 'T' in size_str:
+                total_gb += float(size_str.replace('T', '')) * 1024
+            elif 'G' in size_str:
+                total_gb += float(size_str.replace('G', ''))
+            elif 'M' in size_str:
+                total_gb += float(size_str.replace('M', '')) / 1024
+
+        return round(total_gb, 2)
+
+
     def extract_hardware_metadata(self, server_data: Dict[str, Any]) -> Dict[str, Any]:
         """Extract hardware metadata from server data"""
         hardware_profile = server_data.get('hardware_profile', {})
+        storage_devices = hardware_profile.get('storage_devices', [])
+        storage_devices_count = len(storage_devices)
+        storage_total_gb = self.calculate_total_storage(storage_devices)
+
+        # Status - infer from uptime
         system_overview = server_data.get('system_overview', {})
+        status = 'running' if system_overview.get('uptime') else 'unknown'
 
         # CPU information
         cpu_info = hardware_profile.get('cpu', {})
@@ -109,29 +132,40 @@ class ServerProcessor(BaseProcessor):
         usb_devices = hardware_profile.get('usb_devices', [])
         physical_device_count = len(pci_devices) + len(usb_devices)
 
+        # GPU information
+        gpus = hardware_profile.get('gpus', [])
+        gpu_count = len(gpus)
+        gpu_info = self.extract_gpu_summary(gpus) if gpus else None
+
         # Virtualization counts
         container_count = self.count_containers(server_data)
-        vm_count = self.count_vms(server_data)
-        lxc_count = self.count_lxc_containers(server_data)
+        vm_count = server_data.get('_proxmox_vm_count', self.count_vms(server_data))
+        lxc_count = server_data.get('_proxmox_lxc_count', self.count_lxc_containers(server_data))
 
         # System information
         hostname = server_data.get('hostname', system_overview.get('hostname', 'unknown'))
+        system_type = server_data.get('system_type', 'unknown')
         system_architecture = system_overview.get('architecture', 'unknown')
         os_info = system_overview.get('os_release', '')
         os_type, os_version = self.parse_os_info(os_info)
 
-        return {
+        metadata = {
             'hostname': hostname,
+            'system_type': system_type,
             'system_architecture': system_architecture,
             'system_memory_gb': system_memory_gb,
             'cpu_model': cpu_model,
             'cpu_cores_physical': cpu_cores_physical,
             'cpu_cores_logical': cpu_cores_logical,
+            'storage_total_gb': storage_total_gb,
+            'storage_devices_count': storage_devices_count,
+            'status': status,
             'motherboard_model': motherboard_model,
             'motherboard_manufacturer': motherboard_manufacturer,
             'ip_addresses': ip_addresses,
             'physical_network_interfaces_count': physical_network_interfaces_count,
             'physical_device_count': physical_device_count,
+            'gpu_count': gpu_count,
             'container_count': container_count,
             'vm_count': vm_count,
             'lxc_count': lxc_count,
@@ -139,6 +173,12 @@ class ServerProcessor(BaseProcessor):
             'os_version': os_version,
             'last_updated': server_data.get('timestamp', datetime.now().isoformat())
         }
+
+        # Add GPU info if available
+        if gpu_info:
+            metadata['gpu_info'] = gpu_info
+
+        return metadata
 
     def extract_ip_addresses(self, network_config: Dict[str, Any]) -> List[str]:
         """Extract IP addresses from network configuration"""
@@ -190,12 +230,12 @@ class ServerProcessor(BaseProcessor):
 
     def count_vms(self, server_data: Dict[str, Any]) -> int:
         """Count VMs (placeholder - VMs typically collected separately)"""
-        # VMs are usually in separate proxmox collection files
+        # This will be overridden by proxmox data if available
         return 0
 
     def count_lxc_containers(self, server_data: Dict[str, Any]) -> int:
         """Count LXC containers (placeholder - LXC typically collected separately)"""
-        # LXC containers are usually in separate proxmox collection files
+        # This will be overridden by proxmox data if available
         return 0
 
     def parse_os_info(self, os_release: str) -> tuple[str, str]:
@@ -222,6 +262,28 @@ class ServerProcessor(BaseProcessor):
 
         return os_type, os_version
 
+    def extract_gpu_summary(self, gpus: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Extract GPU summary information for metadata"""
+        if not gpus:
+            return None
+
+        gpu_summary = {
+            'count': len(gpus),
+            'vendors': [],
+            'models': []
+        }
+
+        for gpu in gpus:
+            vendor = gpu.get('vendor', 'Unknown')
+            if vendor not in gpu_summary['vendors']:
+                gpu_summary['vendors'].append(vendor)
+
+            model = gpu.get('model', 'Unknown')
+            if model and model != 'Unknown':
+                gpu_summary['models'].append(model)
+
+        return gpu_summary
+
     def generate_server_content(self, server_data: Dict[str, Any], metadata: Dict[str, Any]) -> str:
         """Generate comprehensive server content description"""
         hardware_profile = server_data.get('hardware_profile', {})
@@ -229,7 +291,7 @@ class ServerProcessor(BaseProcessor):
         # Basic system info
         content_parts = []
         content_parts.append(
-            f"{metadata['hostname']} is a {metadata['os_type']} {metadata['os_version']} server "
+            f"{metadata['hostname']} is a {metadata['os_type']} {metadata['os_version']} {metadata['system_type']} server "
             f"with {metadata['cpu_model']} ({metadata['cpu_cores_physical']} physical cores, "
             f"{metadata['cpu_cores_logical']} logical cores) and {metadata['system_memory_gb']}GB RAM."
         )
@@ -245,6 +307,12 @@ class ServerProcessor(BaseProcessor):
         # Motherboard
         if metadata['motherboard_manufacturer'] != 'Unknown':
             content_parts.append(f"- Motherboard: {metadata['motherboard_manufacturer']} {metadata['motherboard_model']}")
+
+        # GPU information
+        if metadata.get('gpu_count', 0) > 0:
+            gpu_info = metadata.get('gpu_info', {})
+            gpu_description = self.describe_gpus(hardware_profile.get('gpus', []), gpu_info)
+            content_parts.append(f"- GPUs: {gpu_description}")
 
         # Storage details are now handled by StorageProcessor
 
@@ -267,6 +335,11 @@ class ServerProcessor(BaseProcessor):
         content_parts.append("\nVirtualization and Services:")
         content_parts.append(
             f"- Containers: {metadata['container_count']} Docker containers"
+        )
+
+        content_parts.append(
+            f"- Storage: {metadata['storage_devices_count']} physical devices, "
+            f"{metadata['storage_total_gb']}GB total capacity"
         )
 
         if metadata['vm_count'] > 0 or metadata['lxc_count'] > 0:
@@ -317,6 +390,53 @@ class ServerProcessor(BaseProcessor):
             return f" including {', '.join(unique_devices)}"
 
         return ""
+
+    def describe_gpus(self, gpus: List[Dict[str, Any]], gpu_info: Dict[str, Any]) -> str:
+        """Generate GPU description for content"""
+        if not gpus:
+            return "None detected"
+
+        descriptions = []
+
+        for gpu in gpus:
+            vendor = gpu.get('vendor', 'Unknown')
+            model = gpu.get('model', 'Unknown GPU')
+
+            # Build GPU description
+            parts = [f"{vendor} {model}"]
+
+            # Add memory if available
+            memory_mb = gpu.get('memory_total_mb')
+            if memory_mb:
+                memory_gb = round(memory_mb / 1024, 1)
+                parts.append(f"{memory_gb}GB VRAM")
+
+            # Add driver version for NVIDIA
+            driver = gpu.get('driver_version')
+            if driver:
+                parts.append(f"driver {driver}")
+
+            # Add PCIe info if available
+            pcie_gen = gpu.get('pcie_generation')
+            pcie_width = gpu.get('pcie_width')
+            if pcie_gen and pcie_width:
+                parts.append(f"PCIe Gen{pcie_gen} x{pcie_width}")
+
+            # Check if Intel integrated or discrete
+            is_discrete = gpu.get('is_discrete')
+            if is_discrete is not None:
+                if is_discrete:
+                    parts.append("(discrete)")
+                else:
+                    parts.append("(integrated)")
+
+            descriptions.append(' '.join(parts))
+
+        # Format based on count
+        if len(descriptions) == 1:
+            return descriptions[0]
+        else:
+            return f"{len(descriptions)} GPUs: " + "; ".join(descriptions)
 
     def identify_key_services(self, server_data: Dict[str, Any]) -> List[str]:
         """Identify key running services"""
@@ -419,12 +539,36 @@ class ServerProcessor(BaseProcessor):
             except Exception as e:
                 logger.warning(f"Failed to generate LLM tags for {hostname}: {e}")
 
+        # Extract detailed hardware information
+        hardware_profile = server_data.get('hardware_profile', {})
+
         document = {
             'id': f'server_{hostname}',
             'type': 'server',
             'title': f'{hostname} hardware description',
             'content': content,
             'metadata': metadata,
+            'hardware_details': {
+                'cpu': hardware_profile.get('cpu', {}),
+                'memory': hardware_profile.get('memory', {}),
+                'motherboard': hardware_profile.get('motherboard', {}),
+                'gpus': hardware_profile.get('gpus', []),
+                'pci_devices': hardware_profile.get('pci_devices', []),
+                'usb_devices': hardware_profile.get('usb_devices', []),
+                'temperatures': hardware_profile.get('temperatures', {})
+            },
+            'network_details': {
+                'interfaces': server_data.get('network_configuration', {}).get('interfaces', ''),
+                'routes': server_data.get('network_configuration', {}).get('routes', ''),
+                'listening_ports': server_data.get('network_configuration', {}).get('listening_ports', '')
+            },
+            'system_info': {
+                'system_overview': server_data.get('system_overview', {}),
+                'resource_usage': server_data.get('resource_usage', {}),
+                'security_status': server_data.get('security_status', {}),
+                'service_status': server_data.get('service_status', {}),
+                'docker_configuration': server_data.get('docker_configuration', {})
+            },
             'tags': list(set(tags))  # Remove duplicates
         }
 
@@ -432,6 +576,56 @@ class ServerProcessor(BaseProcessor):
         self.content_validator.validate_document(document)
 
         return document
+
+    def find_proxmox_file(self, hostname: str) -> Optional[str]:
+        """Find corresponding proxmox file for a hostname"""
+        # Try different patterns
+        patterns = [
+            f"{self.collected_data_path}/*{hostname}*_proxmox.json",
+            f"{self.collected_data_path}/{hostname}_proxmox.json"
+        ]
+
+        for pattern in patterns:
+            files = glob.glob(pattern)
+            if files:
+                return files[0]
+
+        return None
+
+    def parse_proxmox_data(self, file_path: str) -> Optional[Dict[str, Any]]:
+        """Parse Proxmox VM/LXC data from collected JSON file"""
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+
+            if not data.get('success', False):
+                logger.warning(f"Proxmox data collection was not successful in {file_path}")
+                return None
+
+            return data.get('data', {})
+        except Exception as e:
+            logger.error(f"Error parsing proxmox data from {file_path}: {e}")
+            return None
+
+    def count_proxmox_workloads(self, proxmox_data: Dict[str, Any]) -> tuple[int, int]:
+        """Count VMs and LXC containers from Proxmox data
+
+        Returns:
+            tuple: (vm_count, lxc_count) - only counting running instances
+        """
+        if not proxmox_data:
+            return 0, 0
+
+        # Count running VMs
+        vms = proxmox_data.get('vms', [])
+        vm_count = len([vm for vm in vms if vm.get('status') == 'running'])
+
+        # Count running LXC containers
+        lxc_containers = proxmox_data.get('lxc_containers', [])
+        lxc_count = len([lxc for lxc in lxc_containers if lxc.get('status') == 'running'])
+
+        return vm_count, lxc_count
+
 
     def process_servers(self) -> Dict[str, Any]:
         """Process all server files and return server documents"""
@@ -447,6 +641,18 @@ class ServerProcessor(BaseProcessor):
                 server_data = self.parse_server_data(file_path)
                 if not server_data:
                     continue
+
+                if server_data.get('system_type') == 'proxmox':
+                    proxmox_file = self.find_proxmox_file(hostname)
+                    if proxmox_file:
+                        logger.info(f"Found Proxmox data for {hostname}")
+                        proxmox_data = self.parse_proxmox_data(proxmox_file)
+                        if proxmox_data:
+                            # Override VM/LXC counts with actual Proxmox data
+                            vm_count, lxc_count = self.count_proxmox_workloads(proxmox_data)
+                            # Inject counts into server_data for metadata extraction
+                            server_data['_proxmox_vm_count'] = vm_count
+                            server_data['_proxmox_lxc_count'] = lxc_count
 
                 # Create document
                 document = self.create_server_document(server_data, hostname)

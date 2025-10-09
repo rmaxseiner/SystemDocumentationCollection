@@ -9,8 +9,9 @@ import argparse
 from pathlib import Path
 import json
 
-from src.processors import ContainerProcessor, ServerProcessor, StorageProcessor
+from src.processors import ContainerProcessor, HostProcessor, ServerProcessor, StorageProcessor
 from src.processors.manual_docs_processor import ManualDocsProcessor
+from src.processors.configuration_processor import ConfigurationProcessor
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
@@ -255,6 +256,35 @@ class InfrastructurePipeline:
             except Exception as e:
                 print(f"❌ Storage processing failed: {str(e)}")
 
+        # Run Host Processor (Proxmox VMs/LXC)
+        if self.config.rag_processing.host_processor.get('enabled', True):
+            print("\n🏠 Processing Proxmox Hosts (VMs/LXC)...")
+            host_config = self.config.rag_processing.host_processor
+            host_processor = HostProcessor(
+                'hosts',
+                {
+                    'collected_data_directory': 'collected_data',
+                    'output_directory': self.config.rag_processing.output_directory,
+                    'enable_llm_tagging': host_config.get('enable_llm_tagging', True),
+                    'llm': self.config.rag_processing.llm,
+                    'cleaning_rules': host_config.get('cleaning_rules', {}),
+                    'metadata_config': {},
+                    'assembly_config': {}
+                }
+            )
+
+            try:
+                result = host_processor.process(self.collection_results)
+                if result.success:
+                    print(f"✅ Host processing successful")
+                    print(f"🏠 Hosts processed: {result.data.get('hosts_processed', 0)}")
+                    print(f"🖥️ Systems found: {result.data.get('systems_found', 0)}")
+                    success_results.append('hosts')
+                else:
+                    print(f"❌ Host processing failed: {result.error}")
+            except Exception as e:
+                print(f"❌ Host processing failed: {str(e)}")
+
         # Run Manual Documentation Processor
         if self.config.rag_processing.manual_docs_processor['enabled']:
             print("\n📚 Processing Manual Documentation...")
@@ -281,12 +311,39 @@ class InfrastructurePipeline:
             except Exception as e:
                 print(f"❌ Manual documentation processing failed: {str(e)}")
 
+        # Run Configuration Processor
+        config_processor_enabled = getattr(self.config.rag_processing, 'configuration_processor', {}).get('enabled', True)
+        if config_processor_enabled:
+            print("\n⚙️ Processing Configuration Files...")
+            config_processor_config = getattr(self.config.rag_processing, 'configuration_processor', {})
+            configuration_processor = ConfigurationProcessor(
+                'configuration',
+                {
+                    'services_dir': config_processor_config.get('services_dir', 'infrastructure-docs/services'),
+                    'output_dir': self.config.rag_processing.output_directory
+                }
+            )
+            try:
+                # Configuration processor doesn't need collection_results
+                result = configuration_processor.process()
+                if result.success:
+                    print(f"✅ Configuration processing successful")
+                    print(f"⚙️ Services processed: {result.data.get('services_processed', 0)}")
+                    print(f"📄 Documents generated: {result.data.get('documents_generated', 0)}")
+                    success_results.append('configuration')
+                else:
+                    print(f"❌ Configuration processing failed: {result.error}")
+            except Exception as e:
+                print(f"❌ Configuration processing failed: {str(e)}")
+
         # Summary
         print(f"\n🎯 RAG Processing Summary:")
         print(f"   📦 Container processing: {'✅' if 'containers' in success_results else '❌'}")
         print(f"   🖥️ Server processing: {'✅' if 'servers' in success_results else '❌'}")
         print(f"   💾 Storage processing: {'✅' if 'storage' in success_results else '❌'}")
+        print(f"   🏠 Host processing: {'✅' if 'hosts' in success_results else '❌'}")
         print(f"   📚 Manual docs processing: {'✅' if 'manual_docs' in success_results else '❌'}")
+        print(f"   ⚙️ Configuration processing: {'✅' if 'configuration' in success_results else '❌'}")
 
         # Create ChromaDB if processing was successful
         chromadb_success = False

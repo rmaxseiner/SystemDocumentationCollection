@@ -20,13 +20,14 @@ except ImportError:
 class SystemDocumentationCollector(SystemStateCollector):
     """
     Collects comprehensive system documentation including:
-    - Hardware information
+    - Hardware information (CPU, memory, motherboard, GPUs)
     - System configuration
     - Service status
     - Resource usage
     - Network configuration
     - Storage details
     Enhanced with better error handling and system-specific commands.
+    Supports detection of NVIDIA, AMD, and Intel discrete GPUs.
     """
 
     def __init__(self, name: str, config: Dict):
@@ -158,6 +159,14 @@ class SystemDocumentationCollector(SystemStateCollector):
             result = self.ssh_connector.execute_command("pveversion", log_command=False)
             if result.success:
                 overview['proxmox_version'] = result.output.strip()
+        else:
+            # For other Linux distributions, parse os-release for distribution info
+            if overview.get('os_release') and overview['os_release'] != 'unavailable':
+                dist_info = self._parse_os_release(overview['os_release'])
+                if dist_info.get('name'):
+                    overview['distribution'] = dist_info['name']
+                if dist_info.get('version'):
+                    overview['distribution_version'] = dist_info['version']
 
         return overview
 
@@ -207,6 +216,12 @@ class SystemDocumentationCollector(SystemStateCollector):
         temperatures = self._get_temperature_sensors()
         if temperatures:
             hardware['temperatures'] = temperatures
+
+        # GPU information (discrete GPUs)
+        self.logger.debug("Getting GPU information...")
+        gpus = self._get_gpu_information()
+        if gpus:
+            hardware['gpus'] = gpus
 
         return hardware
 
@@ -310,13 +325,15 @@ class SystemDocumentationCollector(SystemStateCollector):
         return motherboard
 
     def _get_storage_devices(self) -> List[Dict]:
-        """Get storage device information"""
+        """Get storage device information (hardware devices only, excludes loop/virtual devices)"""
         devices = []
 
-        # Use lsblk for storage devices - try JSON first, fallback to text
+        # Use lsblk for storage devices - exclude loop devices
+        # -d: only show top-level devices (not partitions)
+        # -e7: exclude loop devices (major number 7)
         result = self.ssh_connector.execute_command_with_fallback(
-            "lsblk -o NAME,SIZE,TYPE,MODEL,SERIAL,MOUNTPOINT -J 2>/dev/null",
-            "lsblk -o NAME,SIZE,TYPE,MODEL,SERIAL,MOUNTPOINT",
+            "lsblk -d -e7 -o NAME,SIZE,TYPE,MODEL,SERIAL,ROTA,TRAN -J 2>/dev/null",
+            "lsblk -d -e7 -o NAME,SIZE,TYPE,MODEL,SERIAL,ROTA,TRAN",
             timeout=15,
             context="storage devices"
         )
@@ -326,9 +343,16 @@ class SystemDocumentationCollector(SystemStateCollector):
                 if result.command.endswith('-J 2>/dev/null'):
                     # JSON format
                     data = json.loads(result.output)
-                    devices = data.get('blockdevices', [])
+                    raw_devices = data.get('blockdevices', [])
+
+                    # Filter out virtual/non-hardware devices by type
+                    for device in raw_devices:
+                        device_type = device.get('type', '').lower()
+                        # Only include physical disk types
+                        if device_type in ['disk', 'part', 'raid']:
+                            devices.append(device)
                 else:
-                    # Text format fallback
+                    # Text format fallback - store as-is since we already filtered with -e7
                     devices = [{'lsblk_output': result.output}]
             except json.JSONDecodeError:
                 # If JSON parsing fails, store as text
@@ -378,6 +402,152 @@ class SystemDocumentationCollector(SystemStateCollector):
                 temperatures['parsed_temperatures'] = temp_values
 
         return temperatures
+
+    def _get_gpu_information(self) -> List[Dict[str, Any]]:
+        """Get discrete GPU information (NVIDIA, AMD, Intel)"""
+        gpus = []
+
+        # Try NVIDIA GPUs first using nvidia-smi
+        self.logger.debug("Checking for NVIDIA GPUs...")
+        result = self.ssh_connector.execute_command(
+            "nvidia-smi --query-gpu=index,name,driver_version,memory.total,memory.used,memory.free,temperature.gpu,utilization.gpu,pcie.link.gen.current,pcie.link.width.current --format=csv,noheader,nounits 2>/dev/null",
+            timeout=15, log_command=False
+        )
+
+        if result.success and result.output.strip():
+            # Parse NVIDIA GPU information
+            for line in result.output.strip().split('\n'):
+                try:
+                    parts = [p.strip() for p in line.split(',')]
+                    if len(parts) >= 6:
+                        gpu_info = {
+                            'vendor': 'NVIDIA',
+                            'index': int(parts[0]),
+                            'model': parts[1],
+                            'driver_version': parts[2],
+                            'memory_total_mb': int(parts[3]) if parts[3] else None,
+                            'is_discrete': True  # NVIDIA GPUs detected via nvidia-smi are always discrete
+                        }
+
+                        # Add optional fields if available (excluding real-time metrics)
+                        if len(parts) > 8 and parts[8]:
+                            gpu_info['pcie_generation'] = int(parts[8])
+                        if len(parts) > 9 and parts[9]:
+                            gpu_info['pcie_width'] = int(parts[9])
+
+                        gpus.append(gpu_info)
+                except (ValueError, IndexError) as e:
+                    self.logger.debug(f"Failed to parse NVIDIA GPU line: {line}, error: {e}")
+
+        # Try AMD GPUs using rocm-smi
+        self.logger.debug("Checking for AMD GPUs...")
+        result = self.ssh_connector.execute_command("rocm-smi --showproductname --showmeminfo vram --showtemp 2>/dev/null",
+                                                    timeout=15, log_command=False)
+
+        if result.success and result.output.strip() and 'not found' not in result.output.lower():
+            # Parse AMD GPU information - rocm-smi output format varies, so capture as structured text
+            current_gpu = None
+            for line in result.output.strip().split('\n'):
+                if 'GPU' in line and '[' in line:
+                    # Start of new GPU section (e.g., "GPU[0]")
+                    if current_gpu:
+                        gpus.append(current_gpu)
+                    current_gpu = {
+                        'vendor': 'AMD',
+                        'is_discrete': True,  # AMD GPUs detected via rocm-smi are always discrete
+                        'rocm_smi_output': []
+                    }
+
+                if current_gpu:
+                    current_gpu['rocm_smi_output'].append(line)
+
+                    # Try to extract specific fields (excluding real-time metrics)
+                    if 'Card series:' in line or 'Card model:' in line:
+                        current_gpu['model'] = line.split(':', 1)[1].strip()
+                    elif 'VRAM Total Memory' in line:
+                        try:
+                            # Extract memory size
+                            mem_match = re.search(r'(\d+)', line)
+                            if mem_match:
+                                current_gpu['memory_total_mb'] = int(mem_match.group(1))
+                        except:
+                            pass
+
+            if current_gpu:
+                gpus.append(current_gpu)
+
+        # Try Intel GPUs using intel_gpu_top or lspci
+        self.logger.debug("Checking for Intel discrete GPUs...")
+        result = self.ssh_connector.execute_command(
+            "lspci | grep -i 'vga\\|3d\\|display' | grep -i intel",
+            timeout=10, log_command=False
+        )
+
+        if result.success and result.output.strip():
+            for line in result.output.strip().split('\n'):
+                # Parse lspci output for Intel GPUs
+                # Example: 00:02.0 VGA compatible controller: Intel Corporation Device 4680 (rev 0c)
+                if 'intel' in line.lower():
+                    gpu_info = {
+                        'vendor': 'Intel',
+                        'lspci_line': line.strip()
+                    }
+
+                    # Try to extract model name
+                    if ':' in line:
+                        parts = line.split(':', 2)
+                        if len(parts) >= 3:
+                            model_part = parts[2].strip()
+                            gpu_info['model'] = model_part
+
+                    # Check if it's integrated or discrete by looking at the bus ID
+                    # Typically integrated GPUs are on bus 00:02.0
+                    bus_match = re.match(r'^(\d+):(\d+)\.\d+', line)
+                    if bus_match:
+                        bus_num = int(bus_match.group(1))
+                        device_num = int(bus_match.group(2))
+                        # If not the typical integrated GPU location, likely discrete
+                        if not (bus_num == 0 and device_num == 2):
+                            gpu_info['is_discrete'] = True
+                            gpus.append(gpu_info)
+                        else:
+                            gpu_info['is_discrete'] = False
+                            # Still include it but note it might be integrated
+                            gpus.append(gpu_info)
+
+        # Fallback: Use lspci to find any discrete GPUs we might have missed
+        if not gpus:
+            self.logger.debug("No GPUs detected via specialized tools, checking lspci for any discrete GPUs...")
+            result = self.ssh_connector.execute_command(
+                "lspci | grep -i 'vga\\|3d\\|display' | grep -iv 'audio'",
+                timeout=10, log_command=False
+            )
+
+            if result.success and result.output.strip():
+                for line in result.output.strip().split('\n'):
+                    gpu_info = {
+                        'vendor': 'Unknown',
+                        'lspci_line': line.strip()
+                    }
+
+                    # Try to determine vendor from line
+                    line_lower = line.lower()
+                    if 'nvidia' in line_lower:
+                        gpu_info['vendor'] = 'NVIDIA'
+                    elif 'amd' in line_lower or 'ati' in line_lower:
+                        gpu_info['vendor'] = 'AMD'
+                    elif 'intel' in line_lower:
+                        gpu_info['vendor'] = 'Intel'
+
+                    # Extract model name
+                    if ':' in line:
+                        parts = line.split(':', 2)
+                        if len(parts) >= 3:
+                            gpu_info['model'] = parts[2].strip()
+
+                    gpus.append(gpu_info)
+
+        return gpus
 
     def _get_storage_configuration(self, system_type: str) -> Dict[str, Any]:
         """Get storage configuration based on system type"""
@@ -645,6 +815,33 @@ class SystemDocumentationCollector(SystemStateCollector):
                 security['recent_failed_logins'] = 0
 
         return security
+
+    def _parse_os_release(self, os_release_content: str) -> Dict[str, str]:
+        """Parse /etc/os-release content to extract distribution info"""
+        dist_info = {}
+
+        for line in os_release_content.split('\n'):
+            line = line.strip()
+            if not line or '=' not in line:
+                continue
+
+            key, value = line.split('=', 1)
+            # Remove quotes from value
+            value = value.strip('"').strip("'")
+
+            if key == 'NAME':
+                dist_info['name'] = value
+            elif key == 'VERSION':
+                dist_info['version'] = value
+            elif key == 'VERSION_ID':
+                # Use VERSION_ID as fallback if VERSION is not available
+                if 'version' not in dist_info:
+                    dist_info['version'] = value
+            elif key == 'PRETTY_NAME':
+                # Store pretty name as alternative
+                dist_info['pretty_name'] = value
+
+        return dist_info
 
     def sanitize_data(self, data: Any) -> Any:
         """System documentation specific data sanitization"""

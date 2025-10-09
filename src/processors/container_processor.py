@@ -317,7 +317,7 @@ class ContainerProcessor(BaseProcessor):
             "title": f"{original_container.get('name', 'unknown')} on {original_container.get('_system', 'unknown')}",
             "content": " ".join(content_parts),
             "metadata": {
-                "system_name": original_container.get('_system', 'unknown'),
+                "hosted_by": original_container.get('_system', 'unknown'),
                 "container_name": original_container.get('name', 'unknown'),
                 "image": original_container.get('image', 'unknown'),
                 "status": original_container.get('status', 'unknown'),
