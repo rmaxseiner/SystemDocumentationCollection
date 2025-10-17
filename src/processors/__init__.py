@@ -11,6 +11,7 @@ from .host_processor import HostProcessor
 from .manual_docs_processor import ManualDocsProcessor
 from .server_processor import ServerProcessor
 from .storage_processor import StorageProcessor
+from .main_processor import MainProcessor
 
-__all__ = ['BaseProcessor', 'ProcessingResult', 'ConfigurationProcessor', 'ContainerProcessor', 'HostProcessor', 'ManualDocsProcessor', 'ServerProcessor', 'StorageProcessor']
+__all__ = ['BaseProcessor', 'ProcessingResult', 'ConfigurationProcessor', 'ContainerProcessor', 'HostProcessor', 'ManualDocsProcessor', 'ServerProcessor', 'StorageProcessor', 'MainProcessor']
 

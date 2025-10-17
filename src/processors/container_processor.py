@@ -19,6 +19,7 @@ from .base_processor import BaseProcessor, ProcessingResult
 from ..utils.rag_utils import TemporalDataCleaner, MetadataExtractor, RAGDataAssembler
 from ..utils.llm_client import create_llm_client, LLMRequest
 from ..utils.content_validator import ContentValidator
+from ..utils.service_grouper import ServiceGrouper
 
 
 class ContainerProcessor(BaseProcessor):
@@ -53,6 +54,9 @@ class ContainerProcessor(BaseProcessor):
             config.get('max_word_count', 400),
             config.get('min_content_length', 10)
         )
+
+        # Service grouping
+        self.service_grouper = ServiceGrouper()
 
         # Output configuration
         self.output_dir = Path(config.get('output_dir', 'rag_output'))
@@ -116,31 +120,44 @@ class ContainerProcessor(BaseProcessor):
 
             # Process containers through pipeline
             if self.parallel_processing and len(containers) > 1:
-                rag_entities = self._process_containers_parallel(containers)
+                container_documents = self._process_containers_parallel(containers)
             else:
-                rag_entities = self._process_containers_sequential(containers)
+                container_documents = self._process_containers_sequential(containers)
+
+            # Group containers into services
+            self.logger.info("Grouping containers into services...")
+            updated_containers, service_documents = self.service_grouper.group_containers_into_services(container_documents)
 
             # Save containers.jsonl
-            containers_file = self._save_containers_jsonl(rag_entities, output_path)
+            containers_file = self._save_containers_jsonl(updated_containers, output_path)
+
+            # Save services.jsonl
+            services_file = self._save_services_jsonl(service_documents, output_path)
 
             # Update rag_data.json
-            rag_data_file = self._update_rag_data_json(rag_entities, collected_data, output_path)
+            rag_data_file = self._update_rag_data_json(
+                updated_containers,
+                service_documents,
+                collected_data,
+                output_path
+            )
 
-            self.logger.info(f"Container processing completed: {len(rag_entities)} entities generated")
+            self.logger.info(f"Container processing completed: {len(container_documents)} containers, {len(service_documents)} services")
 
             return ProcessingResult(
                 success=True,
                 data={
                     'containers_file': str(containers_file),
+                    'services_file': str(services_file),
                     'rag_data_file': str(rag_data_file),
-                    'containers_processed': len(containers),
-                    'entities_generated': len(rag_entities),
+                    'containers_processed': len(container_documents),
+                    'services_generated': len(service_documents),
                     'output_directory': str(output_path)
                 },
                 metadata={
                     'processor_type': 'container_rag',
-                    'containers_processed': len(containers),
-                    'entities_generated': len(rag_entities),
+                    'containers_processed': len(container_documents),
+                    'services_generated': len(service_documents),
                     'llm_enabled': self.enable_llm_tagging,
                     'output_directory': str(output_path)
                 }
@@ -278,10 +295,7 @@ class ContainerProcessor(BaseProcessor):
 
     def _convert_to_document_format(self, rag_entity: Dict[str, Any], original_container: Dict[str, Any]) -> Dict[
         str, Any]:
-        """Convert RAG entity to document format matching the target schema"""
-
-        # Extract service type from image
-        service_type = self._extract_service_type_from_image(original_container.get('image', ''))
+        """Convert RAG entity to container document format"""
 
         # Count persistent mounts
         mounts = original_container.get('mounts', [])
@@ -291,37 +305,54 @@ class ContainerProcessor(BaseProcessor):
         ports = original_container.get('ports', {})
         exposed_ports = [port for port in ports.keys() if port] if ports else []
 
+        # Extract devices
+        devices = original_container.get('devices', [])
+        device_list = [device for device in devices if device] if devices else []
+
         # Get restart policy
         restart_policy = original_container.get('restart_policy', {})
         restart_policy_name = restart_policy.get('Name', 'unknown') if isinstance(restart_policy, dict) else str(
             restart_policy)
 
-        # Create enhanced content
+        # Get networks
+        networks = original_container.get('networks', [])
+
+        # Get labels
+        labels = original_container.get('labels', {})
+
+        # Create container-focused content
         content_parts = [
-            f"{original_container.get('name', 'unknown')} is a {service_type} service running on {original_container.get('_system', 'unknown')}.",
-            f"It uses the {original_container.get('image', 'unknown')} Docker image and is currently {original_container.get('status', 'unknown')}."
+            f"{original_container.get('name', 'unknown')} is a Docker container running on {original_container.get('_system', 'unknown')}.",
+            f"It uses the {original_container.get('image', 'unknown')} image and is currently {original_container.get('status', 'unknown')}."
         ]
 
         if exposed_ports:
-            content_parts.append(f"It exposes ports: {', '.join(exposed_ports)}.")
+            content_parts.append(f"Exposed ports: {', '.join(exposed_ports)}.")
+
+        if networks:
+            content_parts.append(f"Connected to networks: {', '.join(networks)}.")
 
         if persistent_mounts > 0:
-            content_parts.append(f"It has {persistent_mounts} persistent data mounts.")
+            content_parts.append(f"Has {persistent_mounts} persistent data mounts.")
 
         if restart_policy_name != 'unknown':
             content_parts.append(f"Restart policy: {restart_policy_name}.")
 
         document = {
             "id": rag_entity['id'],
-            "type": "service",
-            "title": f"{original_container.get('name', 'unknown')} on {original_container.get('_system', 'unknown')}",
+            "type": "container",
+            "title": f"{original_container.get('name', 'unknown')} container on {original_container.get('_system', 'unknown')}",
             "content": " ".join(content_parts),
             "metadata": {
                 "hosted_by": original_container.get('_system', 'unknown'),
                 "container_name": original_container.get('name', 'unknown'),
                 "image": original_container.get('image', 'unknown'),
                 "status": original_container.get('status', 'unknown'),
-                "service_type": service_type
+                "networks": networks,
+                "ports": exposed_ports,
+                "devices": device_list,
+                "labels": labels,
+                "restart_policy": restart_policy_name
             },
             "tags": rag_entity.get('tags', [])
         }
@@ -497,9 +528,25 @@ class ContainerProcessor(BaseProcessor):
         self.logger.info(f"Saved {len(documents)} container documents to {containers_file}")
         return containers_file
 
-    def _update_rag_data_json(self, documents: List[Dict[str, Any]], collected_data: Dict[str, Any],
-                              output_path: Path) -> Path:
-        """Update rag_data.json with container documents and host entities"""
+    def _save_services_jsonl(self, documents: List[Dict[str, Any]], output_path: Path) -> Path:
+        """Save service documents as JSONL file"""
+        services_file = output_path / 'services.jsonl'
+
+        with open(services_file, 'w') as f:
+            for document in documents:
+                f.write(json.dumps(document, default=str) + '\n')
+
+        self.logger.info(f"Saved {len(documents)} service documents to {services_file}")
+        return services_file
+
+    def _update_rag_data_json(
+        self,
+        container_documents: List[Dict[str, Any]],
+        service_documents: List[Dict[str, Any]],
+        collected_data: Dict[str, Any],
+        output_path: Path
+    ) -> Path:
+        """Update rag_data.json with container and service documents"""
         rag_data_file = output_path / 'rag_data.json'
 
         # Load existing rag_data.json or create new structure
@@ -515,19 +562,26 @@ class ContainerProcessor(BaseProcessor):
             self.logger.info("Creating new rag_data.json")
             rag_data = self._create_empty_rag_data()
 
-        # Remove existing container documents (same format we're inserting)
+        # Remove existing container and service documents
         original_count = len(rag_data.get('documents', []))
         rag_data['documents'] = [
             doc for doc in rag_data.get('documents', [])
-            if not (doc.get('type') == 'service' and doc.get('id', '').startswith('container_'))
+            if not (
+                (doc.get('type') == 'container' and doc.get('id', '').startswith('container_')) or
+                (doc.get('type') == 'service' and doc.get('id', '').startswith('service_'))
+            )
         ]
         removed_count = original_count - len(rag_data['documents'])
         if removed_count > 0:
-            self.logger.info(f"Removed {removed_count} existing container documents")
+            self.logger.info(f"Removed {removed_count} existing container/service documents")
 
         # Add new container documents
-        rag_data['documents'].extend(documents)
-        self.logger.info(f"Added {len(documents)} new container documents")
+        rag_data['documents'].extend(container_documents)
+        self.logger.info(f"Added {len(container_documents)} new container documents")
+
+        # Add new service documents
+        rag_data['documents'].extend(service_documents)
+        self.logger.info(f"Added {len(service_documents)} new service documents")
 
         # Update host entities in entities.systems
         self._update_host_entities(rag_data, collected_data)
@@ -536,14 +590,18 @@ class ContainerProcessor(BaseProcessor):
         rag_data['metadata']['export_timestamp'] = datetime.now().isoformat()
         rag_data['metadata']['total_containers'] = len([
             doc for doc in rag_data['documents']
-            if doc.get('type') == 'service' and doc.get('id', '').startswith('container_')
+            if doc.get('type') == 'container' and doc.get('id', '').startswith('container_')
+        ])
+        rag_data['metadata']['total_services'] = len([
+            doc for doc in rag_data['documents']
+            if doc.get('type') == 'service' and doc.get('id', '').startswith('service_')
         ])
 
         # Save updated rag_data.json
         with open(rag_data_file, 'w') as f:
             json.dump(rag_data, f, indent=2, default=str)
 
-        self.logger.info(f"Updated rag_data.json with {len(documents)} container documents")
+        self.logger.info(f"Updated rag_data.json with {len(container_documents)} containers and {len(service_documents)} services")
         return rag_data_file
 
     def _create_empty_rag_data(self) -> Dict[str, Any]:
@@ -553,6 +611,7 @@ class ContainerProcessor(BaseProcessor):
                 "export_timestamp": datetime.now().isoformat(),
                 "total_systems": 0,
                 "total_containers": 0,
+                "total_services": 0,
                 "total_vms": 0
             },
             "documents": [],
@@ -565,37 +624,51 @@ class ContainerProcessor(BaseProcessor):
         }
 
     def _update_host_entities(self, rag_data: Dict[str, Any], collected_data: Dict[str, Any]):
-        """Update host entities with container counts"""
+        """Update host entities with container and service counts"""
         systems = rag_data.get('entities', {}).get('systems', {})
 
-        # Count containers per system
-        system_container_counts = {}
+        # Count containers and services per system
+        system_stats = {}
         for system_name in collected_data.keys():
-            # Count containers for this system in our documents
+            # Count containers for this system
             container_count = len([
                 doc for doc in rag_data['documents']
-                if (doc.get('type') == 'service' and
+                if (doc.get('type') == 'container' and
                     doc.get('id', '').startswith('container_') and
-                    doc.get('metadata', {}).get('system_name') == system_name)
+                    doc.get('metadata', {}).get('hosted_by') == system_name)
             ])
-            system_container_counts[system_name] = container_count
+
+            # Count services for this system
+            service_count = len([
+                doc for doc in rag_data['documents']
+                if (doc.get('type') == 'service' and
+                    doc.get('id', '').startswith('service_') and
+                    doc.get('metadata', {}).get('hosted_by') == system_name)
+            ])
+
+            system_stats[system_name] = {
+                'containers': container_count,
+                'services': service_count
+            }
 
         # Update or add system entities
-        for system_name, container_count in system_container_counts.items():
+        for system_name, stats in system_stats.items():
             if system_name in systems:
                 # Update existing system
-                systems[system_name]['containers'] = container_count
-                systems[system_name]['status'] = 'active' if container_count > 0 else 'inactive'
-                self.logger.debug(f"Updated system {system_name}: {container_count} containers")
+                systems[system_name]['containers'] = stats['containers']
+                systems[system_name]['services'] = stats['services']
+                systems[system_name]['status'] = 'active' if stats['containers'] > 0 else 'inactive'
+                self.logger.debug(f"Updated system {system_name}: {stats['containers']} containers, {stats['services']} services")
             else:
                 # Add new system
                 systems[system_name] = {
                     "type": "docker",
-                    "containers": container_count,
+                    "containers": stats['containers'],
+                    "services": stats['services'],
                     "vms": 0,
-                    "status": "active" if container_count > 0 else "inactive"
+                    "status": "active" if stats['containers'] > 0 else "inactive"
                 }
-                self.logger.debug(f"Added new system {system_name}: {container_count} containers")
+                self.logger.debug(f"Added new system {system_name}: {stats['containers']} containers, {stats['services']} services")
 
         # Update total systems count in metadata
         rag_data['metadata']['total_systems'] = len(systems)

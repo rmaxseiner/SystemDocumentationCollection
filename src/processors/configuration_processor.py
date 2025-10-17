@@ -166,8 +166,14 @@ class ConfigurationProcessor(BaseProcessor):
             except Exception as e:
                 self.logger.warning(f"Failed to load metadata for {service_name}: {e}")
 
-        # Extract host and service info from metadata
-        host = collection_metadata.get('collection_host', 'unknown')
+        # Extract host and service info from metadata with fallback logic
+        # If collection_host is not in metadata, try to infer from subdirectory names or use service_name
+        host = collection_metadata.get('collection_host')
+        if not host or host == 'unknown':
+            # Log warning about missing host metadata
+            self.logger.warning(f"No collection_host found in metadata for {service_name}, using service_name as fallback")
+            host = service_name
+
         container_name = collection_metadata.get('container_name', service_name)
         service_type = collection_metadata.get('service_type', service_name)
 
@@ -329,8 +335,10 @@ class ConfigurationProcessor(BaseProcessor):
                 job_content = yaml.dump(scrape_config, default_flow_style=False)
                 job_file_name = f"{job_name}_scrape_config.yml"
 
-                # Save individual scrape config
-                job_file_path = target_path.parent / job_file_name
+                # Save individual scrape config to 'decomposed' subdirectory
+                decomposed_dir = target_path.parent / 'decomposed'
+                decomposed_dir.mkdir(parents=True, exist_ok=True)
+                job_file_path = decomposed_dir / job_file_name
                 with open(job_file_path, 'w') as f:
                     f.write(job_content)
 
@@ -342,7 +350,7 @@ class ConfigurationProcessor(BaseProcessor):
 
                 job_document = {
                     "id": job_doc_id,
-                    "type": "configuration_file",
+                    "type": "configuration_file_decomposed",
                     "title": f"Prometheus Scrape Job - {job_name}",
                     "content": job_file_name,
                     "metadata": {
@@ -362,6 +370,7 @@ class ConfigurationProcessor(BaseProcessor):
                     },
                     "tags": [
                         "configuration",
+                        "configuration_decomposed",
                         "prometheus",
                         "monitoring",
                         "scrape_job",
@@ -405,8 +414,10 @@ class ConfigurationProcessor(BaseProcessor):
                 service_content = yaml.dump({service_name_key: service_config}, default_flow_style=False)
                 service_file_name = f"{service_name_key}_service.yml"
 
-                # Save individual service config
-                service_file_path = target_path.parent / service_file_name
+                # Save individual service config to 'decomposed' subdirectory
+                decomposed_dir = target_path.parent / 'decomposed'
+                decomposed_dir.mkdir(parents=True, exist_ok=True)
+                service_file_path = decomposed_dir / service_file_name
                 with open(service_file_path, 'w') as f:
                     f.write(service_content)
 
@@ -418,7 +429,7 @@ class ConfigurationProcessor(BaseProcessor):
 
                 service_document = {
                     "id": service_doc_id,
-                    "type": "configuration_file",
+                    "type": "configuration_file_decomposed",
                     "title": f"Docker Service - {service_name_key}",
                     "content": service_file_name,
                     "metadata": {
@@ -439,6 +450,7 @@ class ConfigurationProcessor(BaseProcessor):
                     },
                     "tags": [
                         "configuration",
+                        "configuration_decomposed",
                         "docker",
                         "container",
                         "service",
@@ -484,11 +496,11 @@ class ConfigurationProcessor(BaseProcessor):
             self.logger.info("Creating new rag_data.json")
             rag_data = self._create_empty_rag_data()
 
-        # Remove existing configuration documents
+        # Remove existing configuration documents (both types)
         original_doc_count = len(rag_data.get('documents', []))
         rag_data['documents'] = [
             doc for doc in rag_data.get('documents', [])
-            if doc.get('type') != 'configuration_file'
+            if doc.get('type') not in ['configuration_file', 'configuration_file_decomposed']
         ]
         removed_doc_count = original_doc_count - len(rag_data['documents'])
         if removed_doc_count > 0:
@@ -501,12 +513,19 @@ class ConfigurationProcessor(BaseProcessor):
         # Update metadata
         rag_data['metadata']['export_timestamp'] = datetime.now().isoformat()
 
-        # Count configuration documents
+        # Count configuration documents (both types)
         config_doc_count = len([
             doc for doc in rag_data['documents']
-            if doc.get('type') == 'configuration_file'
+            if doc.get('type') in ['configuration_file', 'configuration_file_decomposed']
         ])
         rag_data['metadata']['total_configuration_files'] = config_doc_count
+
+        # Count decomposed files separately
+        decomposed_count = len([
+            doc for doc in rag_data['documents']
+            if doc.get('type') == 'configuration_file_decomposed'
+        ])
+        rag_data['metadata']['total_configuration_files_decomposed'] = decomposed_count
 
         # Save updated rag_data.json
         with open(rag_data_file, 'w') as f:

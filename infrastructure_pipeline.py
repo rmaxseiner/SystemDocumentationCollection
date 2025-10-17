@@ -12,6 +12,15 @@ import json
 from src.processors import ContainerProcessor, HostProcessor, ServerProcessor, StorageProcessor
 from src.processors.manual_docs_processor import ManualDocsProcessor
 from src.processors.configuration_processor import ConfigurationProcessor
+from src.processors.main_processor import MainProcessor
+from src.processors.sub_processors import (
+    DockerSubProcessor,
+    HardwareSubProcessor,
+    DockerComposeSubProcessor,
+    ProxmoxSubProcessor,
+    PhysicalStorageSubProcessor
+)
+from src.utils.service_grouper import ServiceGrouper
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
@@ -21,6 +30,7 @@ from src.config.settings import initialize_config
 from src.collectors.docker_collector import DockerCollector
 from src.collectors.proxmox_collector import ProxmoxCollector
 from src.collectors.system_documentation_collector import SystemDocumentationCollector
+from src.collectors.main_collector import MainCollector
 from src.utils.chroma_utils import create_chromadb_from_rag_data
 
 
@@ -46,7 +56,8 @@ class InfrastructurePipeline:
         collectors = {
             'docker': DockerCollector,
             'proxmox': ProxmoxCollector,
-            'system_documentation': SystemDocumentationCollector
+            'system_documentation': SystemDocumentationCollector,
+            'unified': MainCollector  # New unified collector
         }
 
         collector_class = collectors.get(system.type)
@@ -54,12 +65,15 @@ class InfrastructurePipeline:
             # Create system config dict
             system_config = system.__dict__.copy()
 
-            # Add service collection settings for Docker systems
-            if system.type == 'docker' and system.collect_services:
+            # Add service collection settings for Docker and Unified systems
+            if system.collect_services and system.type in ['docker', 'unified']:
                 self.logger.info(f"Adding service definitions to {system.name}")
                 system_config['service_definitions'] = self.config.service_collection.service_definitions
                 system_config['services_output_dir'] = self.config.service_collection.output_directory
                 self.logger.debug(f"Added {len(system_config['service_definitions'])} service definitions")
+
+            # For unified collector, docker_compose_search_paths are already in system_config
+            # from ConfigManager (added in settings.py)
 
             return collector_class(system.name, system_config)
         else:
@@ -285,6 +299,86 @@ class InfrastructurePipeline:
             except Exception as e:
                 print(f"❌ Host processing failed: {str(e)}")
 
+        # Run Main Unified Processor
+        main_processor_enabled = getattr(self.config.rag_processing, 'main_processor', {}).get('enabled', True)
+        if main_processor_enabled:
+            print("\n🔄 Processing Unified Collector Output...")
+            main_processor_config = getattr(self.config.rag_processing, 'main_processor', {})
+
+            # Create MainProcessor
+            main_processor = MainProcessor(
+                'unified_processing',
+                {
+                    'collected_data_dir': main_processor_config.get('collected_data_dir', 'collected_data'),
+                    'output_dir': self.config.rag_processing.output_directory,
+                    'enable_llm_tagging': main_processor_config.get('enable_llm_tagging', True)
+                }
+            )
+
+            # Register sub-processor classes
+            # MainProcessor will instantiate them per-system with the appropriate system_name
+            main_processor.register_sub_processor_class('docker', DockerSubProcessor)
+            main_processor.register_sub_processor_class('hardware', HardwareSubProcessor)
+            main_processor.register_sub_processor_class('hardware_allocation', HardwareSubProcessor)  # Same processor handles both
+            main_processor.register_sub_processor_class('docker_compose', DockerComposeSubProcessor)
+            main_processor.register_sub_processor_class('proxmox', ProxmoxSubProcessor)
+            # Register PhysicalStorageSubProcessor to also process hardware section for storage devices
+            # This will be called AFTER HardwareSubProcessor for the same section, extracting storage info
+            main_processor.register_sub_processor_class('hardware', PhysicalStorageSubProcessor, append=True)
+
+            try:
+                result = main_processor.process(self.collection_results)
+                if result.success:
+                    print(f"✅ Unified processing successful")
+                    print(f"🔄 Systems processed: {result.data.get('systems_processed', 0)}")
+                    print(f"📄 Documents generated: {result.data.get('documents_generated', 0)}")
+                    success_results.append('unified')
+
+                    # Run service grouping post-processing
+                    print("\n🔗 Running Service Grouping...")
+                    try:
+                        grouper = ServiceGrouper(allow_multi_host_services=True)
+                        # Load rag_data.json
+                        rag_data_path = Path(self.config.rag_processing.output_directory) / 'rag_data.json'
+                        if rag_data_path.exists():
+                            with open(rag_data_path, 'r') as f:
+                                rag_data = json.load(f)
+
+                            # Extract container documents
+                            containers = [doc for doc in rag_data.get('documents', []) if doc.get('type') == 'container']
+
+                            if containers:
+                                # Group containers into services
+                                updated_containers, services = grouper.group_containers_into_services(containers)
+                                print(f"✅ Service grouping completed: {len(services)} services created")
+
+                                # Replace old container documents with updated ones (with service_id)
+                                # Remove old container documents
+                                non_container_docs = [doc for doc in rag_data['documents'] if doc.get('type') != 'container']
+
+                                # Add updated containers and services
+                                rag_data['documents'] = non_container_docs + updated_containers + services
+
+                                # Update metadata
+                                rag_data['metadata']['total_services'] = len(services)
+                                rag_data['metadata']['total_documents'] = len(rag_data['documents'])
+
+                                # Save updated rag_data
+                                with open(rag_data_path, 'w') as f:
+                                    json.dump(rag_data, f, indent=2, default=str)
+                                print(f"💾 Updated rag_data.json with service documents")
+                            else:
+                                print("ℹ️  No container documents found for service grouping")
+                        else:
+                            print("⚠️  rag_data.json not found, skipping service grouping")
+                    except Exception as e:
+                        print(f"⚠️  Service grouping failed: {str(e)}")
+                        self.logger.error(f"Service grouping failed: {str(e)}")
+                else:
+                    print(f"❌ Unified processing failed: {result.error}")
+            except Exception as e:
+                print(f"❌ Unified processing failed: {str(e)}")
+
         # Run Manual Documentation Processor
         if self.config.rag_processing.manual_docs_processor['enabled']:
             print("\n📚 Processing Manual Documentation...")
@@ -342,6 +436,7 @@ class InfrastructurePipeline:
         print(f"   🖥️ Server processing: {'✅' if 'servers' in success_results else '❌'}")
         print(f"   💾 Storage processing: {'✅' if 'storage' in success_results else '❌'}")
         print(f"   🏠 Host processing: {'✅' if 'hosts' in success_results else '❌'}")
+        print(f"   🔄 Unified processing: {'✅' if 'unified' in success_results else '❌'}")
         print(f"   📚 Manual docs processing: {'✅' if 'manual_docs' in success_results else '❌'}")
         print(f"   ⚙️ Configuration processing: {'✅' if 'configuration' in success_results else '❌'}")
 
@@ -476,6 +571,42 @@ class InfrastructurePipeline:
         elif system.type == 'system_documentation':
             hostname = data.get('system_overview', {}).get('hostname', 'unknown')
             print(f"   🖥️  System: {hostname}")
+
+        elif system.type == 'unified':
+            # Unified collector returns different structure
+            summary = data.get('summary', {})
+            sections = data.get('sections', {})
+            capabilities = data.get('capabilities', {})
+
+            print(f"   🔧 System Type: {data.get('system_type', 'unknown')}")
+
+            # Show if virtualized
+            if capabilities.get('is_lxc'):
+                print(f"   📦 Container Type: LXC")
+            elif capabilities.get('is_vm'):
+                print(f"   🖥️  Virtualization: VM")
+            elif capabilities.get('is_physical'):
+                print(f"   🏠 Hardware: Physical")
+
+            print(f"   📊 Sections Collected: {summary.get('total_sections', 0)}")
+
+            # Print specific counts from summary
+            if 'containers_count' in summary:
+                print(f"   🐳 Containers: {summary['containers_count']}")
+            if 'compose_files_count' in summary:
+                print(f"   📜 Compose Files: {summary['compose_files_count']}")
+            if 'vms_count' in summary:
+                print(f"   🖥️  VMs: {summary['vms_count']}")
+
+            # CPU info (physical or allocated)
+            if 'cpu_model' in summary:
+                print(f"   💻 CPU: {summary['cpu_model']}")
+            if 'allocated_vcpus' in summary:
+                print(f"   ⚙️  vCPUs: {summary['allocated_vcpus']}")
+
+            # Memory info
+            if 'memory_gb' in summary:
+                print(f"   🧠 Memory: {summary['memory_gb']} GB")
 
     def run_validation(self):
         """Run configuration validation and system checks"""

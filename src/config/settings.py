@@ -74,6 +74,9 @@ class SystemConfig:
     # System documentation specific fields
     system_type: Optional[str] = 'auto'  # 'unraid', 'proxmox', 'ubuntu', 'auto'
 
+    # Docker compose search paths (can be overridden per system)
+    docker_compose_search_paths: Optional[List[str]] = None
+
     def __post_init__(self):
         """Validate configuration after initialization"""
         if self.type == 'api' and not self.api_endpoint:
@@ -84,6 +87,20 @@ class SystemConfig:
 
         if self.type in ['prometheus', 'grafana'] and not self.container_name and self.use_container:
             raise ValueError(f"Container name required for containerized {self.type} collection")
+
+
+@dataclass
+class DockerComposeCollectionConfig:
+    """Docker Compose file collection configuration"""
+    enabled: bool = True
+    search_paths: List[str] = field(default_factory=lambda: [
+        '/root/dockerhome',
+        '/home/*/dockerhome',
+        '/opt/docker',
+        '/docker',
+        '/srv/docker',
+        '/boot/config/plugins/compose.manager/projects'
+    ])
 
 
 @dataclass
@@ -199,6 +216,7 @@ class ConfigManager:
             self.config_file = self._find_config_file()
 
         self.systems: List[SystemConfig] = []
+        self.docker_compose_collection = DockerComposeCollectionConfig()
         self.service_collection = ServiceCollectionConfig()
         self.git_config = GitConfig()
         self.collection_config = CollectionConfig()
@@ -303,6 +321,10 @@ class ConfigManager:
             with open(self.config_file, 'r') as f:
                 config_data = yaml.safe_load(f)
 
+            # Load docker compose collection configuration
+            docker_compose_data = config_data.get('docker_compose_collection', {})
+            self.docker_compose_collection = DockerComposeCollectionConfig(**docker_compose_data)
+
             # Load service collection configuration FIRST
             service_data = config_data.get('service_collection', {})
             self.service_collection = ServiceCollectionConfig(**service_data)
@@ -388,6 +410,10 @@ class ConfigManager:
                 if system_data.get('type') == 'docker' and system_data.get('collect_services', False):
                     system_data['service_definitions'] = self.service_collection.service_definitions
                     system_data['services_output_dir'] = self.service_collection.output_directory
+
+                # Add docker compose search paths to all systems
+                if self.docker_compose_collection and self.docker_compose_collection.search_paths:
+                    system_data['docker_compose_search_paths'] = self.docker_compose_collection.search_paths
 
                 # NOW create the SystemConfig object with the updated system_data
                 system_config = SystemConfig(**system_data)

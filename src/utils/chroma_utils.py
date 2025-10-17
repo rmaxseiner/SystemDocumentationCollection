@@ -124,6 +124,14 @@ class ChromaDBManager:
         seen_ids = set()
 
         for doc in documents:
+            # Check for duplicate IDs first, before processing
+            doc_id = str(doc.get('id', f'doc-{len(ids)}'))
+            if doc_id in seen_ids:
+                logger.warning(f"Skipping duplicate document ID: {doc_id}")
+                continue
+
+            seen_ids.add(doc_id)
+
             # Handle missing fields gracefully
             title = doc.get('title', 'Untitled')
             content = doc.get('content', '')
@@ -148,13 +156,6 @@ class ChromaDBManager:
                 elif value is not None:
                     cleaned_metadata[key] = str(value)
 
-            # Check for duplicate IDs
-            doc_id = str(doc.get('id', f'doc-{len(ids)}'))
-            if doc_id in seen_ids:
-                logger.warning(f"Skipping duplicate document ID: {doc_id}")
-                continue
-
-            seen_ids.add(doc_id)
             metadatas.append(cleaned_metadata)
             ids.append(doc_id)
 
