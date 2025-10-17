@@ -9,7 +9,7 @@ import argparse
 from pathlib import Path
 import json
 
-from src.processors import ContainerProcessor, HostProcessor, ServerProcessor, StorageProcessor
+from src.processors import ContainerProcessor
 from src.processors.manual_docs_processor import ManualDocsProcessor
 from src.processors.configuration_processor import ConfigurationProcessor
 from src.processors.main_processor import MainProcessor
@@ -27,9 +27,6 @@ sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 from src.utils.logging_config import setup_logging, get_logger
 from src.config.settings import initialize_config
-from src.collectors.docker_collector import DockerCollector
-from src.collectors.proxmox_collector import ProxmoxCollector
-from src.collectors.system_documentation_collector import SystemDocumentationCollector
 from src.collectors.main_collector import MainCollector
 from src.utils.chroma_utils import create_chromadb_from_rag_data
 
@@ -53,32 +50,24 @@ class InfrastructurePipeline:
 
     def get_collector_for_system(self, system):
         """Get appropriate collector for system type"""
-        collectors = {
-            'docker': DockerCollector,
-            'proxmox': ProxmoxCollector,
-            'system_documentation': SystemDocumentationCollector,
-            'unified': MainCollector  # New unified collector
-        }
-
-        collector_class = collectors.get(system.type)
-        if collector_class:
-            # Create system config dict
-            system_config = system.__dict__.copy()
-
-            # Add service collection settings for Docker and Unified systems
-            if system.collect_services and system.type in ['docker', 'unified']:
-                self.logger.info(f"Adding service definitions to {system.name}")
-                system_config['service_definitions'] = self.config.service_collection.service_definitions
-                system_config['services_output_dir'] = self.config.service_collection.output_directory
-                self.logger.debug(f"Added {len(system_config['service_definitions'])} service definitions")
-
-            # For unified collector, docker_compose_search_paths are already in system_config
-            # from ConfigManager (added in settings.py)
-
-            return collector_class(system.name, system_config)
-        else:
-            self.logger.warning(f"No collector available for type '{system.type}'")
+        # Only unified collector is supported now
+        if system.type != 'unified':
+            self.logger.warning(f"System type '{system.type}' is not supported. Use 'unified' type instead.")
             return None
+
+        # Create system config dict
+        system_config = system.__dict__.copy()
+
+        # Add service collection settings if enabled
+        if system.collect_services:
+            self.logger.info(f"Adding service definitions to {system.name}")
+            system_config['service_definitions'] = self.config.service_collection.service_definitions
+            system_config['services_output_dir'] = self.config.service_collection.output_directory
+            self.logger.debug(f"Added {len(system_config['service_definitions'])} service definitions")
+
+        # docker_compose_search_paths are already in system_config from ConfigManager
+
+        return MainCollector(system.name, system_config)
 
     def run_collection_phase(self, collect_services_only=False, collect_system_only=False):
         """Run the data collection phase"""
@@ -97,10 +86,10 @@ class InfrastructurePipeline:
         print(f"📋 Found {len(enabled_systems)} enabled systems")
 
         # Create output directories
-        output_dir = Path('collected_data')
+        output_dir = Path('work/collected')
         services_dir = Path(self.config.service_collection.output_directory)
-        output_dir.mkdir(exist_ok=True)
-        services_dir.mkdir(exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        services_dir.mkdir(parents=True, exist_ok=True)
 
         # Clean old collection files at start
         self._clean_old_collection_files(output_dir)
@@ -175,7 +164,7 @@ class InfrastructurePipeline:
             if not self._load_latest_collection_data():
                 self.logger.error("Failed to load collection data")
                 print("❌ Failed to load collection data from disk")
-                print("💡 Run collection first or check that collected_data/ directory exists")
+                print("💡 Run collection first or check that work/collected/ directory exists")
                 return False
 
             print(f"✅ Loaded data for {len(self.collection_results)} systems")
@@ -216,89 +205,6 @@ class InfrastructurePipeline:
             except Exception as e:
                 print(f"❌ Container processing failed: {str(e)}")
 
-        # Run Server Processor
-        if self.config.rag_processing.server_processor['enabled']:
-            print("\n🖥️ Processing Server Hardware Documentation...")
-            server_config = self.config.rag_processing.server_processor
-            server_processor = ServerProcessor(
-                'servers',
-                {
-                    'collected_data_path': server_config.get('collected_data_path', 'collected_data'),
-                    'output_path': self.config.rag_processing.output_directory,
-                    'llm': self.config.rag_processing.llm,
-                    'enable_llm_tagging': server_config.get('enable_llm_tagging', True),
-                    'max_word_count': server_config.get('max_word_count', 400),
-                    'min_content_length': server_config.get('min_content_length', 10)
-                }
-            )
-
-            try:
-                result = server_processor.process(self.collection_results)
-                if result.success:
-                    print(f"✅ Server processing successful")
-                    print(f"🖥️ Servers processed: {result.metadata.get('processed_servers', 0)}")
-                    success_results.append('servers')
-                else:
-                    print(f"❌ Server processing failed: {result.error}")
-            except Exception as e:
-                print(f"❌ Server processing failed: {str(e)}")
-
-        # Run Storage Processor
-        if self.config.rag_processing.storage_processor.get('enabled', True):
-            print("\n💾 Processing Storage Hardware...")
-            storage_config = self.config.rag_processing.storage_processor
-            storage_processor = StorageProcessor(
-                'storage',
-                {
-                    'collected_data_path': storage_config.get('collected_data_path', 'collected_data'),
-                    'output_path': self.config.rag_processing.output_directory,
-                    'llm': self.config.rag_processing.llm,
-                    'enable_llm_tagging': storage_config.get('enable_llm_tagging', True),
-                    'max_word_count': storage_config.get('max_word_count', 400),
-                    'min_content_length': storage_config.get('min_content_length', 10)
-                }
-            )
-
-            try:
-                result = storage_processor.process(self.collection_results)
-                if result.success:
-                    print(f"✅ Storage processing successful")
-                    print(f"💾 Storage devices processed: {result.metadata.get('processed_storage_devices', 0)}")
-                    success_results.append('storage')
-                else:
-                    print(f"❌ Storage processing failed: {result.error}")
-            except Exception as e:
-                print(f"❌ Storage processing failed: {str(e)}")
-
-        # Run Host Processor (Proxmox VMs/LXC)
-        if self.config.rag_processing.host_processor.get('enabled', True):
-            print("\n🏠 Processing Proxmox Hosts (VMs/LXC)...")
-            host_config = self.config.rag_processing.host_processor
-            host_processor = HostProcessor(
-                'hosts',
-                {
-                    'collected_data_directory': 'collected_data',
-                    'output_directory': self.config.rag_processing.output_directory,
-                    'enable_llm_tagging': host_config.get('enable_llm_tagging', True),
-                    'llm': self.config.rag_processing.llm,
-                    'cleaning_rules': host_config.get('cleaning_rules', {}),
-                    'metadata_config': {},
-                    'assembly_config': {}
-                }
-            )
-
-            try:
-                result = host_processor.process(self.collection_results)
-                if result.success:
-                    print(f"✅ Host processing successful")
-                    print(f"🏠 Hosts processed: {result.data.get('hosts_processed', 0)}")
-                    print(f"🖥️ Systems found: {result.data.get('systems_found', 0)}")
-                    success_results.append('hosts')
-                else:
-                    print(f"❌ Host processing failed: {result.error}")
-            except Exception as e:
-                print(f"❌ Host processing failed: {str(e)}")
-
         # Run Main Unified Processor
         main_processor_enabled = getattr(self.config.rag_processing, 'main_processor', {}).get('enabled', True)
         if main_processor_enabled:
@@ -309,7 +215,7 @@ class InfrastructurePipeline:
             main_processor = MainProcessor(
                 'unified_processing',
                 {
-                    'collected_data_dir': main_processor_config.get('collected_data_dir', 'collected_data'),
+                    'collected_data_dir': main_processor_config.get('collected_data_dir', 'work/collected'),
                     'output_dir': self.config.rag_processing.output_directory,
                     'enable_llm_tagging': main_processor_config.get('enable_llm_tagging', True)
                 }
@@ -433,9 +339,6 @@ class InfrastructurePipeline:
         # Summary
         print(f"\n🎯 RAG Processing Summary:")
         print(f"   📦 Container processing: {'✅' if 'containers' in success_results else '❌'}")
-        print(f"   🖥️ Server processing: {'✅' if 'servers' in success_results else '❌'}")
-        print(f"   💾 Storage processing: {'✅' if 'storage' in success_results else '❌'}")
-        print(f"   🏠 Host processing: {'✅' if 'hosts' in success_results else '❌'}")
         print(f"   🔄 Unified processing: {'✅' if 'unified' in success_results else '❌'}")
         print(f"   📚 Manual docs processing: {'✅' if 'manual_docs' in success_results else '❌'}")
         print(f"   ⚙️ Configuration processing: {'✅' if 'configuration' in success_results else '❌'}")
@@ -529,8 +432,8 @@ class InfrastructurePipeline:
         if collection_success and processing_success:
             print("\\n🎉 Full pipeline completed successfully!")
             print("\\n📚 Next steps:")
-            print("   1. Review analysis outputs in analysis_output/")
-            print("   2. Check collected data for accuracy")
+            print("   1. Review collected data in work/collected/")
+            print("   2. Check RAG outputs in rag_output/")
             print("   3. Configure additional processors as needed")
             return True
         else:
@@ -658,7 +561,7 @@ class InfrastructurePipeline:
 
         # Directory permissions check
         print(f"\nDirectory Permissions:")
-        directories = ['collected_data', 'analysis_output', 'rag_output',
+        directories = ['work/collected', 'rag_output',
                        self.config.service_collection.output_directory]
 
         for dir_name in directories:
@@ -691,7 +594,7 @@ class InfrastructurePipeline:
         """Load the latest collection data from disk for processing-only runs"""
         self.logger.info("Loading latest collection data from disk")
 
-        output_dir = Path('collected_data')
+        output_dir = Path('work/collected')
         if not output_dir.exists():
             self.logger.error("Collection data directory not found")
             return False

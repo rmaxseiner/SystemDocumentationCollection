@@ -107,7 +107,7 @@ class DockerComposeCollectionConfig:
 class ServiceCollectionConfig:
     """Service collection configuration"""
     enabled: bool = True
-    output_directory: str = "infrastructure-docs/services"
+    output_directory: str = "config/services"
     service_definitions: Dict[str, Dict] = None
 
     def __post_init__(self):
@@ -147,7 +147,7 @@ class RAGProcessingConfig:
 
     manual_docs_processor: Dict[str, Any] = field(default_factory=lambda: {
         'enabled': True,
-        'manual_docs_dir': 'infrastructure-docs/manual',
+        'manual_docs_dir': 'config/manual',
         'validate_schema': True,
         'create_entities': True
     })
@@ -163,13 +163,13 @@ class RAGProcessingConfig:
     server_processor: Dict[str, Any] = field(default_factory=lambda: {
         'enabled': True,
         'enable_llm_tagging': True,
-        'collected_data_path': 'collected_data'
+        'collected_data_path': 'work/collected'
     })
 
     storage_processor: Dict[str, Any] = field(default_factory=lambda: {
         'enabled': True,
         'enable_llm_tagging': True,
-        'collected_data_path': 'collected_data'
+        'collected_data_path': 'work/collected'
     })
 
     service_processor: Dict[str, Any] = field(default_factory=lambda: {
@@ -231,7 +231,7 @@ class ConfigManager:
             Path('config/systems.yml'),
             Path('src/config/systems.yml'),
             Path('/app/config/systems.yml'),
-            Path.home() / '.config' / 'infrastructure-docs' / 'systems.yml'
+            Path.home() / '.config' / 'infrastructure' / 'systems.yml'
         ]
 
         for location in possible_locations:
@@ -272,7 +272,7 @@ class ConfigManager:
             ],
             'service_collection': {
                 'enabled': True,
-                'output_directory': 'infrastructure-docs/services',
+                'output_directory': 'config/services',
                 'service_definitions': {
                     'homepage': {
                         'config_paths': [

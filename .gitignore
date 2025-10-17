@@ -11,35 +11,35 @@ secrets/
 .env
 .env.local
 
-# Test outputs (may contain sensitive data)
-test_output/
-logs/
-EOF
-# Configuration files with sensitive data
-src/config/systems.yml
-config/systems.yml
-*.yml.backup
-
 # Python cache and IDE files
 __pycache__/
 .idea/
 *.pyc
 *.pyo
+.pytest_cache/
 
 # Log files
 *.log
-test_collection.log
 
-# Test outputs
+# Working directories (all pipeline outputs)
+/work/
+/config/
+/rag_output/
+
+# Legacy directories (should be removed)
 /collected_data/
 /collected_configs/
 /analysis_output/
-/archive/
+/logs/
+/test_output/
+/test_rag_output/
 /infrastructure-docs/
 
-/test_rag_output/
-/rag_output/
+# Test venv
 /test_venv/
+/.venv/
+
+# Documentation
 /CLAUDE.md
 
 # ChromaDB files
