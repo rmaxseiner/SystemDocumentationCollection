@@ -201,7 +201,7 @@ class HardwareSubProcessor(SubProcessor):
         # Build comprehensive content
         content = self._build_comprehensive_content(
             cpu, memory, storage_devices, gpus, system_overview,
-            network_details, docker_data, resource_usage
+            network_details, docker_data
         )
 
         # Build hardware_details section
@@ -252,7 +252,12 @@ class HardwareSubProcessor(SubProcessor):
             if network_details.get('dns_config'):
                 network_section['dns_config'] = network_details['dns_config']
 
-        # Build system_info section
+        # Extract IP addresses from network interfaces
+        ip_addresses = []
+        if network_details and network_details.get('interfaces'):
+            ip_addresses = self._extract_ip_addresses(network_details['interfaces'])
+
+        # Build system_info section (without resource_usage - it's too temporal)
         system_info = {
             'system_overview': {
                 'hostname': system_overview.get('hostname', self.system_name),
@@ -265,17 +270,6 @@ class HardwareSubProcessor(SubProcessor):
         # Add OS release info
         if system_overview.get('os_release'):
             system_info['system_overview']['os_release'] = system_overview['os_release']
-
-        # Add resource usage
-        if resource_usage:
-            system_info['resource_usage'] = {
-                'load_average': resource_usage.get('load_average', 'Unknown'),
-                'top_processes_cpu': resource_usage.get('top_processes_cpu', [])[:10],
-                'top_processes_memory': resource_usage.get('top_processes_memory', [])[:10],
-                'process_count': resource_usage.get('process_count', 0)
-            }
-            if resource_usage.get('disk_io'):
-                system_info['resource_usage']['disk_io'] = resource_usage['disk_io']
 
         # Add Docker configuration if present
         docker_configuration = {}
@@ -328,6 +322,10 @@ class HardwareSubProcessor(SubProcessor):
             'tags': tags
         }
 
+        # Add IP addresses if any were found
+        if ip_addresses:
+            document['ip_addresses'] = ip_addresses
+
         # Add optional sections if they have data
         if network_section:
             document['network_details'] = network_section
@@ -348,8 +346,7 @@ class HardwareSubProcessor(SubProcessor):
         gpus: List,
         system_overview: Dict,
         network_details: Dict,
-        docker_data: Dict,
-        resource_usage: Dict
+        docker_data: Dict
     ) -> str:
         """Build comprehensive human-readable content description"""
 
@@ -413,12 +410,6 @@ class HardwareSubProcessor(SubProcessor):
             if container_count > 0:
                 content_parts.append(f"Docker is running with {container_count} containers deployed.")
 
-        # Resource usage
-        if resource_usage:
-            load_avg = resource_usage.get('load_average', '')
-            if load_avg:
-                content_parts.append(f"Current system load: {load_avg}.")
-
         return " ".join(content_parts)
 
     def _parse_size_to_bytes(self, size_str: str) -> int:
@@ -440,6 +431,85 @@ class HardwareSubProcessor(SubProcessor):
             return int(number * units.get(unit, 1))
         except:
             return 0
+
+    def _extract_ip_addresses(self, network_interfaces_text: str) -> List[Dict[str, str]]:
+        """
+        Extract IP addresses from network interface text output from 'ip addr show'
+
+        Args:
+            network_interfaces_text: Raw output from 'ip addr show' command
+
+        Returns:
+            List of dictionaries with interface, ip_address, and type (ipv4/ipv6)
+        """
+        import re
+
+        ip_addresses = []
+
+        if not network_interfaces_text:
+            return ip_addresses
+
+        # Split by interface (lines starting with digit followed by colon)
+        current_interface = None
+
+        for line in network_interfaces_text.split('\n'):
+            # Match interface line: "2: eno1: <BROADCAST,MULTICAST,UP,LOWER_UP> ..."
+            interface_match = re.match(r'^\d+:\s+([^:@]+)', line)
+            if interface_match:
+                current_interface = interface_match.group(1).strip()
+                continue
+
+            if not current_interface:
+                continue
+
+            # Skip loopback and docker bridge interfaces
+            if current_interface in ['lo', 'docker0'] or current_interface.startswith('br-') or current_interface.startswith('veth'):
+                # Match IPv4 address: "    inet 10.30.0.142/24 ..."
+                ipv4_match = re.search(r'inet\s+(\d+\.\d+\.\d+\.\d+)/(\d+)', line)
+                if ipv4_match and current_interface == 'lo':
+                    # Skip loopback 127.0.0.1
+                    continue
+                # Skip docker/veth addresses but continue parsing
+                continue
+
+            # Match IPv4 address: "    inet 10.30.0.142/24 ..."
+            ipv4_match = re.search(r'inet\s+(\d+\.\d+\.\d+\.\d+)/(\d+)', line)
+            if ipv4_match:
+                ip_addr = ipv4_match.group(1)
+                netmask = ipv4_match.group(2)
+
+                # Skip localhost
+                if ip_addr.startswith('127.'):
+                    continue
+
+                # Determine scope (global vs link-local)
+                if 'scope global' in line:
+                    ip_addresses.append({
+                        'interface': current_interface,
+                        'ip_address': f"{ip_addr}/{netmask}",
+                        'type': 'ipv4',
+                        'scope': 'global'
+                    })
+
+            # Match IPv6 address: "    inet6 fe80::ce28:aaff:fe4f:fdc1/64 scope link"
+            ipv6_match = re.search(r'inet6\s+([0-9a-fA-F:]+)/(\d+)', line)
+            if ipv6_match:
+                ip_addr = ipv6_match.group(1)
+                netmask = ipv6_match.group(2)
+
+                # Skip link-local IPv6 (fe80::) and localhost (::1)
+                if ip_addr.startswith('fe80:') or ip_addr == '::1':
+                    continue
+
+                if 'scope global' in line:
+                    ip_addresses.append({
+                        'interface': current_interface,
+                        'ip_address': f"{ip_addr}/{netmask}",
+                        'type': 'ipv6',
+                        'scope': 'global'
+                    })
+
+        return ip_addresses
 
     def _create_allocation_document(self, allocation_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create document for virtualized hardware allocation"""
@@ -486,9 +556,13 @@ class HardwareSubProcessor(SubProcessor):
         content = " ".join(content_parts)
 
         # Extract metadata
+        # Determine if this is a container or VM based on virtualization type
+        # LXC = container, everything else (kvm, qemu, vm, etc.) = virtual_machine
+        is_container = virt_type == 'lxc'
+
         metadata = {
             'system_name': self.system_name,
-            'system_type': 'virtual_machine' if virt_type == 'vm' else 'container',
+            'system_type': 'linux-container' if is_container else 'virtual_machine',
             'virtualization_type': virt_type,
             'cpu_allocated_vcpus': allocated_vcpus,
             'cpu_model': cpu_model,
@@ -500,14 +574,14 @@ class HardwareSubProcessor(SubProcessor):
 
         # Generate tags
         tags = ['virtualized', 'infrastructure']
-        if virt_type == 'lxc':
+        if is_container:
             tags.extend(['container', 'lxc'])
-        elif virt_type == 'vm':
+        else:
             tags.extend(['virtual-machine', 'vm'])
 
         document = {
             'id': f'system_{self.system_name}',
-            'type': 'virtual_system',
+            'type': 'virtual_server',
             'title': f'{self.system_name} resource allocation',
             'content': content,
             'metadata': metadata,

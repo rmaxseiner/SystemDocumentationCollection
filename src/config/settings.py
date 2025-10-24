@@ -147,7 +147,7 @@ class RAGProcessingConfig:
 
     manual_docs_processor: Dict[str, Any] = field(default_factory=lambda: {
         'enabled': True,
-        'manual_docs_dir': 'config/manual',
+        'manual_docs_dir': 'infrastructure-docs/manual',
         'validate_schema': True,
         'create_entities': True
     })

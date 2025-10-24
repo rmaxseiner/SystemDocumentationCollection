@@ -10,12 +10,15 @@ import yaml
 import hashlib
 from pathlib import Path
 from typing import Dict, List, Any, Optional
-import logging
 from datetime import datetime
 import shutil
-import re
+import mimetypes
 
 from .base_processor import BaseProcessor, ProcessingResult
+from .config_parsers.registry import registry
+
+# Maximum file size for parsing (1MB)
+MAX_PARSE_SIZE = 1024 * 1024
 
 
 class ConfigurationProcessor(BaseProcessor):
@@ -156,33 +159,37 @@ class ConfigurationProcessor(BaseProcessor):
         documents = []
         service_name = service_dir.name
 
-        # Load collection metadata if available
-        metadata_file = service_dir / 'collection_metadata.yml'
-        collection_metadata = {}
-        if metadata_file.exists():
-            try:
-                with open(metadata_file, 'r') as f:
-                    collection_metadata = yaml.safe_load(f) or {}
-            except Exception as e:
-                self.logger.warning(f"Failed to load metadata for {service_name}: {e}")
-
-        # Extract host and service info from metadata with fallback logic
-        # If collection_host is not in metadata, try to infer from subdirectory names or use service_name
-        host = collection_metadata.get('collection_host')
-        if not host or host == 'unknown':
-            # Log warning about missing host metadata
-            self.logger.warning(f"No collection_host found in metadata for {service_name}, using service_name as fallback")
-            host = service_name
-
-        container_name = collection_metadata.get('container_name', service_name)
-        service_type = collection_metadata.get('service_type', service_name)
-
         # Process each subdirectory (container/service instance)
         for container_dir in service_dir.iterdir():
             if not container_dir.is_dir() or container_dir.name == '__pycache__':
                 continue
 
-            container_name = container_dir.name
+            # Load collection metadata from container directory
+            metadata_file = container_dir / 'collection_metadata.yml'
+            collection_metadata = {}
+            if metadata_file.exists():
+                try:
+                    with open(metadata_file, 'r') as f:
+                        collection_metadata = yaml.safe_load(f) or {}
+                except Exception as e:
+                    self.logger.warning(f"Failed to load metadata for {container_dir.name}: {e}")
+
+            # Extract host and service info from metadata with fallback logic
+            host = collection_metadata.get('collection_host')
+            if not host or host == 'unknown':
+                # Log warning about missing host metadata
+                self.logger.warning(
+                    f"No collection_host found in metadata for {container_dir.name}, "
+                    f"using service_name as fallback"
+                )
+                host = service_name
+
+            container_name = collection_metadata.get('container_name', container_dir.name)
+            service_type = collection_metadata.get('service_type', service_name)
+
+            self.logger.debug(
+                f"Processing container {container_name} on host {host} (service_type: {service_type})"
+            )
 
             # Process configuration files in this container directory
             config_files = self._get_config_files(container_dir)
@@ -293,6 +300,7 @@ class ConfigurationProcessor(BaseProcessor):
                 "parent_config": None,
                 "extracted_from": None,
                 "collection_metadata": collection_metadata,
+                "parsed_config": None,
                 "processed_at": datetime.now().isoformat()
             },
             "tags": [
@@ -305,7 +313,71 @@ class ConfigurationProcessor(BaseProcessor):
             ]
         }
 
+        # Try to parse configuration file for structured data
+        self._parse_and_enhance_document(document, source_file, service_type, config_type)
+
         return document
+
+    def _parse_and_enhance_document(self, document: Dict[str, Any], source_file: Path,
+                                    service_type: str, config_type: str) -> None:
+        """
+        Parse configuration file and enhance document with structured data.
+
+        Args:
+            document: The document to enhance (modified in place)
+            source_file: Path to the source configuration file
+            service_type: Service type
+            config_type: Configuration type
+        """
+        # Check file size - skip very large files
+        file_stats = source_file.stat()
+        if file_stats.st_size > MAX_PARSE_SIZE:
+            self.logger.warning(
+                f"Skipping parse of large file {source_file.name} ({file_stats.st_size} bytes)"
+            )
+            return
+
+        # Check if file is text-based (skip binary files)
+        mime_type, _ = mimetypes.guess_type(str(source_file))
+        if mime_type and not mime_type.startswith('text/'):
+            self.logger.debug(f"Skipping binary file {source_file.name} (MIME: {mime_type})")
+            return
+
+        # Get appropriate parser from registry
+        parser = registry.get_parser(service_type, config_type)
+        if not parser:
+            self.logger.debug(
+                f"No parser available for service_type={service_type}, config_type={config_type}"
+            )
+            return
+
+        try:
+            # Read file content
+            with open(source_file, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+
+            # Parse configuration
+            parsed = parser.parse(content, str(source_file))
+            if parsed:
+                # Add parsed data to document metadata
+                document["metadata"]["parsed_config"] = parsed
+
+                # Extract and add search terms to tags
+                search_terms = parser.extract_search_terms(parsed)
+                if search_terms:
+                    # Add unique search terms to tags
+                    existing_tags = set(document["tags"])
+                    new_tags = [term for term in search_terms if term not in existing_tags]
+                    document["tags"].extend(new_tags)
+
+                self.logger.info(
+                    f"Successfully parsed {source_file.name} using {parser.__class__.__name__}"
+                )
+            else:
+                self.logger.debug(f"Parser returned no data for {source_file.name}")
+
+        except Exception as e:
+            self.logger.warning(f"Failed to parse config file {source_file.name}: {e}")
 
     def _process_prometheus_config(self, source_file: Path, target_path: Path,
                                  service_name: str, container_name: str, host: str,

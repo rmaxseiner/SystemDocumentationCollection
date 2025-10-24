@@ -94,10 +94,6 @@ class InfrastructurePipeline:
         # Clean old collection files at start
         self._clean_old_collection_files(output_dir)
 
-        # Collect from each system
-        total_services = 0
-        total_configs = 0
-
         for system in enabled_systems:
             # Apply collection filters
             if collect_services_only and (system.type != 'docker' or not system.collect_services):
@@ -455,7 +451,8 @@ class InfrastructurePipeline:
             self.logger.error(f"Error cleaning old collection files: {e}")
             print(f"⚠️ Warning: Error cleaning old files: {e}")
 
-    def _print_collection_summary(self, system, data):
+    @staticmethod
+    def _print_collection_summary(system, data):
         """Print summary of collected data"""
         if system.type == 'docker':
             containers = data.get('containers', [])
@@ -478,7 +475,6 @@ class InfrastructurePipeline:
         elif system.type == 'unified':
             # Unified collector returns different structure
             summary = data.get('summary', {})
-            sections = data.get('sections', {})
             capabilities = data.get('capabilities', {})
 
             print(f"   🔧 System Type: {data.get('system_type', 'unknown')}")

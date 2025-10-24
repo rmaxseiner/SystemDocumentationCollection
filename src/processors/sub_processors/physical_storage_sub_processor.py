@@ -157,7 +157,7 @@ class PhysicalStorageSubProcessor(SubProcessor):
 
         # Build metadata
         metadata = {
-            'hostname': self.system_name,
+            'system_name': self.system_name,
             'storage_role': storage_role,
             'total_devices': len(storage_devices),
             'total_capacity_tb': total_capacity_tb,

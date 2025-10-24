@@ -172,6 +172,7 @@ class ManualDocsProcessor(BaseProcessor):
                     doc['metadata'] = {}
                 doc['metadata']['processed_at'] = datetime.now().isoformat()
                 doc['metadata']['source_file'] = str(file_path.relative_to(self.manual_docs_dir))
+                doc['metadata']['source_type'] = 'manual'
 
                 # Validate content length
                 try:
@@ -179,10 +180,19 @@ class ManualDocsProcessor(BaseProcessor):
                 except Exception as e:
                     self.logger.warning(f"Content validation failed for document {doc.get('id', 'unknown')}: {e}")
 
+            # Add processing metadata to each relationship
+            relationships = manual_data.get('relationships', [])
+            for rel in relationships:
+                if 'metadata' not in rel:
+                    rel['metadata'] = {}
+                rel['metadata']['processed_at'] = datetime.now().isoformat()
+                rel['metadata']['source_file'] = str(file_path.relative_to(self.manual_docs_dir))
+                rel['metadata']['source_type'] = 'manual'
+
             return {
                 'documents': documents,
                 'entities': manual_data.get('entities', {}),
-                'relationships': manual_data.get('relationships', [])
+                'relationships': relationships
             }
 
         except Exception as e:
@@ -256,13 +266,11 @@ class ManualDocsProcessor(BaseProcessor):
         if removed_doc_count > 0:
             self.logger.info(f"Removed {removed_doc_count} existing manual documents")
 
-        # Remove existing manual relationships
+        # Remove existing manual relationships (identified by metadata source_type)
         original_rel_count = len(rag_data.get('relationships', []))
         rag_data['relationships'] = [
             rel for rel in rag_data.get('relationships', [])
-            if not rel.get('id', '').startswith('manual_') and
-            not (rel.get('source_id', '').startswith('manual_') or
-                 rel.get('target_id', '').startswith('manual_'))
+            if rel.get('metadata', {}).get('source_type') != 'manual'
         ]
         removed_rel_count = original_rel_count - len(rag_data['relationships'])
         if removed_rel_count > 0:
