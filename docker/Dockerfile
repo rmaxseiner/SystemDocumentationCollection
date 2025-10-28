@@ -1,6 +1,5 @@
-
-# Dockerfile for Infrastructure Documentation Container
-FROM python:3.11-slim
+# Dockerfile for Infrastructure Documentation Collection
+FROM python:3.12-slim
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -9,10 +8,10 @@ RUN apt-get update && apt-get install -y \
     curl \
     jq \
     ca-certificates \
+    cron \
     && rm -rf /var/lib/apt/lists/*
 
-# Create app user and directory
-RUN useradd -m -u 1000 infrauser
+# Create app directory
 WORKDIR /app
 
 # Copy requirements and install Python dependencies
@@ -21,23 +20,22 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY src/ ./src/
-COPY config/ ./config/
-COPY scripts/ ./scripts/
+COPY infrastructure_pipeline.py .
 
-# Create directories for data and logs
-RUN mkdir -p /app/data /app/logs /app/.ssh && \
-    chown -R infrauser:infrauser /app
+# Create directories for outputs and SSH
+RUN mkdir -p /app/rag_output \
+             /app/collected_data \
+             /app/logs \
+             /app/.ssh \
+    && chmod 700 /app/.ssh
 
-# Switch to non-root user
-USER infrauser
+# Copy entrypoint script
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# Set up cron jobs
-COPY crontab /tmp/crontab
-RUN crontab /tmp/crontab
+# Health check - verify pipeline exists and is executable
+HEALTHCHECK --interval=10m --timeout=30s --start-period=2m --retries=3 \
+    CMD test -f /app/infrastructure_pipeline.py || exit 1
 
-# Health check
-HEALTHCHECK --interval=5m --timeout=30s --start-period=5m --retries=3 \
-    CMD python3 /app/src/health_check.py
-
-# Default command runs the scheduler
-CMD ["python3", "/app/src/scheduler.py"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["schedule"]

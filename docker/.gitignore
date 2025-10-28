@@ -1,0 +1,25 @@
+# Ignore sensitive SSH keys
+ssh-keys/
+!ssh-keys/.gitkeep
+
+# Ignore logs
+logs/
+*.log
+
+# Ignore local test output directories
+rag_output/
+collected_data/
+
+# Ignore Docker volumes data
+volumes/
+
+# Ignore environment files with secrets
+.env
+.env.local
+
+# Ignore backup files
+*.backup
+*.bak
+
+# Ignore temp files
+*.tmp

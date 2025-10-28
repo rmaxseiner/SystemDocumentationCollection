@@ -1,0 +1,75 @@
+services:
+  infra-collector:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: infra-collector
+    hostname: infra-collector
+
+    # Environment variables
+    environment:
+      # Python settings
+      - PYTHONUNBUFFERED=1
+
+      # Schedule: Cron format (default: every 6 hours at top of hour)
+      # Examples:
+      #   0 */6 * * *     = Every 6 hours
+      #   0 0,6,12,18 * * * = At 00:00, 06:00, 12:00, 18:00
+      #   */30 * * * *    = Every 30 minutes
+      - CRON_SCHEDULE=0 */6 * * *
+
+      # SSH configuration (optional)
+      # Add known hosts to avoid SSH prompts
+      # - SSH_KNOWN_HOSTS=
+
+      # Or automatically scan hosts (space-separated list)
+      # - SSH_HOST_SCAN=10.30.0.142 192.168.94.94
+
+    # Volumes
+    volumes:
+      # SSH keys (read-only for security)
+      # Place your SSH keys in ./ssh-keys/ directory
+      - ./ssh-keys:/app/.ssh:ro
+
+      # Configuration files (read-only)
+      # Mount infrastructure-docs from parent directory
+      - ../infrastructure-docs:/app/infrastructure-docs:ro
+
+      # Outputs (bind mounts for local testing - easy to inspect)
+      - ./rag_output:/app/rag_output
+      - ./collected_data:/app/collected_data
+
+      # Logs (persisted locally)
+      - ./logs:/app/logs
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Networks
+    networks:
+      - infra-net
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "test", "-f", "/app/infrastructure_pipeline.py"]
+      interval: 10m
+      timeout: 30s
+      start_period: 2m
+      retries: 3
+
+# No named volumes needed for local testing - using bind mounts above
+
+# Networks
+networks:
+  infra-net:
+    driver: bridge

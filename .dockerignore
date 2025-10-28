@@ -1,0 +1,77 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+*.egg
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+env/
+test_venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+.DS_Store
+
+# Project specific
+collected_data/
+rag_output/
+logs/*.log
+*.log
+
+# Docker
+docker/ssh-keys/*
+docker/logs/*
+.dockerignore
+
+# Documentation
+*.md
+!CLAUDE.md
+docs/
+
+# Test files
+test_*.py
+tests/
+demo_*.py
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# SSH keys (security)
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+id_ecdsa*
+authorized_keys
+known_hosts
