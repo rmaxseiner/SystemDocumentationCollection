@@ -1,0 +1,451 @@
+# Physical Server Entity Schema
+# Defines the structure for physical_server documents in rag_data.json
+
+entity_type: physical_server
+description: Physical server infrastructure entity
+
+# Root level fields
+root:
+  id:
+    type: string
+    required: true
+    pattern: "^server_[a-zA-Z0-9_-]+$"
+    description: "Unique identifier in format: server_{hostname}"
+
+  type:
+    type: string
+    required: true
+    enum: [physical_server]
+    description: "Entity type discriminator"
+
+# Tier 1: Vector Search Content
+tier1:
+  title:
+    type: string
+    required: true
+    description: "Human-readable title for the server"
+    example: "unraid-server Physical Server"
+
+  content:
+    type: string
+    required: true
+    min_length: 50
+    description: "Rich description for vector matching including OS, CPU, memory, storage, GPU, workloads"
+
+# Tier 2: Summary Metadata
+tier2:
+  metadata:
+    type: object
+    required: true
+    fields:
+      # Identity
+      hostname:
+        type: string
+        required: true
+        description: "Server hostname"
+
+      system_type:
+        type: string
+        required: true
+        enum: [physical_server]
+        description: "Redundant with type but useful for filtering"
+
+      # Network
+      primary_ip:
+        type: string
+        required: false
+        nullable: true
+        description: "Main management IP address"
+
+      # Operating System
+      os_distribution:
+        type: string
+        required: true
+        description: "OS distribution name"
+        examples: ["Unraid", "Ubuntu", "Proxmox VE", "Debian"]
+
+      os_version:
+        type: string
+        required: true
+        description: "OS version"
+
+      kernel_version:
+        type: string
+        required: true
+        description: "Kernel version"
+
+      architecture:
+        type: string
+        required: true
+        description: "CPU architecture"
+        examples: ["x86_64", "aarch64"]
+
+      # CPU Summary
+      cpu_model:
+        type: string
+        required: true
+        description: "CPU model name"
+
+      cpu_cores:
+        type: integer
+        required: true
+        description: "Physical CPU cores"
+
+      cpu_threads:
+        type: integer
+        required: true
+        description: "Logical processors/threads"
+
+      # Memory Summary
+      memory_total_gb:
+        type: float
+        required: true
+        description: "Total memory in GB"
+
+      memory_type:
+        type: string
+        required: false
+        nullable: true
+        description: "Memory type"
+        examples: ["DDR4", "DDR5"]
+
+      memory_speed_mhz:
+        type: integer
+        required: false
+        nullable: true
+        description: "Memory speed in MHz"
+
+      # Storage Summary
+      storage_total_tb:
+        type: float
+        required: true
+        description: "Total storage in TB"
+
+      storage_devices_count:
+        type: integer
+        required: true
+        description: "Number of storage devices"
+
+      storage_types:
+        type: object
+        required: true
+        description: "Breakdown of storage by type"
+        fields:
+          nvme:
+            type: integer
+            required: true
+          ssd:
+            type: integer
+            required: true
+          hdd:
+            type: integer
+            required: true
+
+      # GPU Summary
+      gpu_count:
+        type: integer
+        required: true
+        description: "Number of GPUs"
+
+      gpu_vendor:
+        type: string
+        required: false
+        nullable: true
+        description: "GPU vendor for quick filtering"
+        examples: ["AMD", "NVIDIA", "Intel"]
+
+      # Workload Summary
+      container_count:
+        type: integer
+        required: false
+        nullable: true
+        description: "Number of Docker containers hosted"
+
+      vm_count:
+        type: integer
+        required: false
+        nullable: true
+        description: "Number of VMs hosted (if applicable)"
+
+      # Metadata
+      last_updated:
+        type: string
+        required: true
+        format: iso8601
+        description: "ISO 8601 timestamp of last update"
+
+      tags:
+        type: array
+        required: true
+        description: "Tags for categorization"
+        item_type: string
+        examples: [["server", "physical", "unraid", "storage-server"]]
+
+# Tier 3: Detailed Information
+tier3:
+  details:
+    type: object
+    required: true
+    fields:
+      # CPU Details
+      cpu:
+        type: object
+        required: true
+        fields:
+          model:
+            type: string
+            required: true
+          cores:
+            type: integer
+            required: true
+          threads:
+            type: integer
+            required: true
+          frequency_mhz:
+            type: integer
+            required: false
+            nullable: true
+          architecture:
+            type: string
+            required: true
+          cache_l1_kb:
+            type: integer
+            required: false
+            nullable: true
+          cache_l2_kb:
+            type: integer
+            required: false
+            nullable: true
+          cache_l3_kb:
+            type: integer
+            required: false
+            nullable: true
+
+      # Memory Details
+      memory:
+        type: object
+        required: true
+        fields:
+          total_gb:
+            type: float
+            required: true
+          available_gb:
+            type: float
+            required: false
+            nullable: true
+          type:
+            type: string
+            required: false
+            nullable: true
+          speed_mhz:
+            type: integer
+            required: false
+            nullable: true
+          modules:
+            type: [array, string]  # Can be list of objects or raw string
+            required: false
+            description: "Individual RAM sticks or raw dmidecode output"
+
+      # Motherboard
+      motherboard:
+        type: object
+        required: true
+        fields:
+          manufacturer:
+            type: string
+            required: false
+            nullable: true
+          product:
+            type: string
+            required: false
+            nullable: true
+          version:
+            type: string
+            required: false
+            nullable: true
+          bios_version:
+            type: string
+            required: false
+            nullable: true
+          bios_date:
+            type: string
+            required: false
+            nullable: true
+
+      # GPUs
+      gpus:
+        type: array
+        required: true
+        description: "List of GPU devices"
+        item_schema:
+          type: object
+          fields:
+            vendor:
+              type: string
+              required: true
+            model:
+              type: string
+              required: true
+            driver_version:
+              type: string
+              required: false
+              nullable: true
+            memory_total_mb:
+              type: integer
+              required: false
+              nullable: true
+            is_discrete:
+              type: boolean
+              required: true
+            pci_address:
+              type: string
+              required: false
+              nullable: true
+            pcie_generation:
+              type: integer
+              required: false
+              nullable: true
+            pcie_width:
+              type: integer
+              required: false
+              nullable: true
+
+      # Storage Devices
+      storage_devices:
+        type: array
+        required: true
+        description: "Physically attached storage devices"
+        item_schema:
+          type: object
+          fields:
+            device_name:
+              type: string
+              required: true
+            type:
+              type: string
+              required: true
+              enum: ["HDD", "SSD", "NVMe"]
+            size_tb:
+              type: float
+              required: true
+            model:
+              type: string
+              required: false
+              nullable: true
+            serial_number:
+              type: string
+              required: false
+              nullable: true
+            mount_point:
+              type: string
+              required: false
+              nullable: true
+            connection_type:
+              type: string
+              required: true
+              examples: ["SATA", "NVMe", "SAS", "USB"]
+            smart_status:
+              type: string
+              required: false
+              nullable: true
+            firmware_version:
+              type: string
+              required: false
+              nullable: true
+
+      # Network Interfaces
+      network_interfaces:
+        type: array
+        required: true
+        description: "Network interface configurations"
+        item_schema:
+          type: object
+          fields:
+            interface:
+              type: string
+              required: true
+            mac_address:
+              type: string
+              required: false
+              nullable: true
+            ip_addresses:
+              type: array
+              required: true
+              item_schema:
+                type: object
+                fields:
+                  ip_address:
+                    type: string
+                    required: true
+                  type:
+                    type: string
+                    required: true
+                    enum: ["ipv4", "ipv6"]
+                  scope:
+                    type: string
+                    required: true
+                    enum: ["global", "link", "host"]
+            speed_mbps:
+              type: integer
+              required: false
+              nullable: true
+            state:
+              type: string
+              required: false
+              nullable: true
+            driver:
+              type: string
+              required: false
+              nullable: true
+
+      # Storage Controllers (optional)
+      storage_controllers:
+        type: array
+        required: false
+        nullable: true
+        description: "HBA/RAID controllers"
+        item_schema:
+          type: object
+          fields:
+            type:
+              type: string
+              required: true
+            model:
+              type: string
+              required: true
+            port_count:
+              type: integer
+              required: true
+            connected_devices:
+              type: integer
+              required: true
+
+      # PCI Devices (optional)
+      pci_devices:
+        type: array
+        required: false
+        description: "Full lspci output lines"
+        item_type: string
+
+      # USB Devices (optional)
+      usb_devices:
+        type: array
+        required: false
+        description: "Full lsusb output lines"
+        item_type: string
+
+      # Temperatures (optional)
+      temperatures:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          sensors_output:
+            type: string
+            required: false
+            nullable: true
+          parsed_temperatures:
+            type: object
+            required: false
+            nullable: true
+            description: "Key-value pairs of sensor names to temperatures"

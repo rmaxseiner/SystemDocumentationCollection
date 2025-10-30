@@ -1,0 +1,341 @@
+systems:
+
+  # Unified collectors (new architecture)
+  - name: "unraid-server"
+    type: "unified"
+    host: "10.20.0.83"
+    port: 22
+    username: "root"
+    ssh_key_path: "/root/.ssh/id_ed25519_jenkins"
+    enabled: true
+    collect_services: true
+
+  - name: "server-containers"
+    type: "unified"
+    host: "10.20.0.162"
+    port: 22
+    username: "root"
+    ssh_key_path: "/root/.ssh/id_ed25519_jenkins"
+    enabled: true
+    collect_services: true
+
+  - name: "SCS-LLM-01"
+    type: "unified"
+    host: "10.30.0.142"
+    port: 22
+    username: "ron-maxseiner"
+    ssh_key_path: "/root/.ssh/id_ed25519_jenkins"
+    enabled: true
+    collect_services: true
+
+  - name: "iot-containers"
+    type: "unified"
+    host: "10.40.0.74"
+    port: 22
+    username: "ron-maxseiner"
+    ssh_key_path: "/root/.ssh/id_ed25519_jenkins"
+    enabled: true
+    collect_services: true
+
+  - name: "pve-01"
+    type: "unified"
+    host: "192.168.94.94"
+    port: 22
+    username: "root"
+    ssh_key_path: "/root/.ssh/id_ed25519_jenkins"
+    enabled: true
+
+  - name: "pve-02"
+    type: "unified"
+    host: "192.168.94.10"
+    port: 22
+    username: "root"
+    ssh_key_path: "/root/.ssh/id_ed25519_jenkins"
+    enabled: true
+
+  - name: "ansible"
+    type: "unified"
+    host: "10.20.0.79"
+    port: 22
+    username: "root"
+    ssh_key_path: "/root/.ssh/id_ed25519_jenkins"
+    enabled: true
+
+  - name: "jenkins-controller"
+    type: "unified"
+    host: "10.20.0.150"
+    port: 22
+    username: "root"
+    ssh_key_path: "/root/.ssh/id_ed25519_jenkins"
+    enabled: true
+
+  - name: "jenkins-build-agent"
+    type: "unified"
+    host: "10.20.0.101"
+    port: 22
+    username: "root"
+    ssh_key_path: "/root/.ssh/id_ed25519_jenkins"
+    enabled: true
+
+  - name: "management-containers"
+    type: "unified"
+    host: "192.168.94.102"
+    port: 22
+    username: "ron-maxseiner"
+    ssh_key_path: "/root/.ssh/id_ed25519_jenkins"
+    enabled: true
+    collect_services: true
+
+  # End Unified collectors (new architecture)
+
+# Docker Compose File Collection Settings
+docker_compose_collection:
+  enabled: true
+  search_paths:
+    # Common docker-compose locations
+    - "/root/dockerhome"
+    - "/home/*/dockerhome"
+    - "/opt/docker"
+    - "/docker"
+    - "/srv/docker"
+    # Unraid Docker Compose Manager plugin location
+    - "/boot/config/plugins/compose.manager/projects"
+
+# Service Configuration Collection Settings
+service_collection:
+  enabled: true
+  output_directory: "infrastructure-docs/services"
+
+  # Service definitions - easily extensible
+  service_definitions:
+    homepage:
+      config_paths:
+        - "/app/config/settings.yaml"
+        - "/app/config/services.yaml"
+        - "/app/config/widgets.yaml"
+        - "/app/config/bookmarks.yaml"
+        - "/app/config/docker.yaml"
+      output_dir: "homepage"
+
+    nginx-proxy-manager:
+      config_paths:
+        - "/data/nginx/proxy_host/*.conf"
+        - "/data/nginx/redirection_host/*.conf"
+        - "/data/nginx/dead_host/*.conf"
+        - "/data/nginx/stream/*.conf"
+      database_export: true
+      output_dir: "nginx-proxy-manager"
+
+    home-assistant:
+      config_paths:
+        - "/config/configuration.yaml"
+        - "/config/automations.yaml"
+        - "/config/scripts.yaml"
+        - "/config/scenes.yaml"
+        - "/config/groups.yaml"
+        - "/config/customize.yaml"
+      exclude_secrets: true
+      output_dir: "home-assistant"
+
+    grafana:
+      config_paths:
+        - "/etc/grafana/grafana.ini"
+        - "/etc/grafana/provisioning/dashboards/*.yaml"
+        - "/etc/grafana/provisioning/datasources/*.yaml"
+        - "/etc/grafana/provisioning/notifiers/*.yaml"
+      api_export: true
+      output_dir: "grafana"
+
+    prometheus:
+      config_paths:
+        - "/etc/prometheus/prometheus.yml"
+        - "/etc/prometheus/alert_rules.yml"
+        - "/etc/prometheus/recording_rules.yml"
+        - "/etc/prometheus/targets/*.yml"
+      output_dir: "prometheus"
+
+    alertmanager:
+      config_paths:
+        - "/etc/alertmanager/alertmanager.yml"
+        - "/etc/alertmanager/config.yml"
+      output_dir: "alertmanager"
+
+    traefik:
+      config_paths:
+        - "/etc/traefik/traefik.yml"
+        - "/etc/traefik/dynamic.yml"
+        - "/etc/traefik/tls.yml"
+      output_dir: "traefik"
+
+    gitea:
+      config_paths:
+        - "/data/gitea/conf/app.ini"
+      exclude_secrets: true
+      output_dir: "gitea"
+
+    pihole:
+      config_paths:
+        - "/etc/pihole/pihole-FTL.conf"
+        - "/etc/pihole/setupVars.conf"
+        - "/etc/pihole/custom.list"
+        - "/etc/dnsmasq.d/*.conf"
+      exclude_secrets: true
+      output_dir: "pihole"
+
+    unbound:
+      config_paths:
+        - "/opt/unbound/etc/unbound/unbound.conf"
+        - "/opt/unbound/etc/unbound/a-records.conf"
+      output_dir: "unbound"
+
+    portainer:
+      config_paths:
+        - "/data/portainer.db"
+        - "/data/docker_config/*.json"
+      output_dir: "portainer"
+
+    nginx:
+      config_paths:
+        - "/etc/nginx/nginx.conf"
+        - "/etc/nginx/conf.d/*.conf"
+        - "/etc/nginx/sites-enabled/*"
+      output_dir: "nginx"
+
+    node-exporter:
+      config_paths:
+        - "/etc/node_exporter/*"
+      output_dir: "node-exporter"
+
+    blackbox-exporter:
+      config_paths:
+        - "/etc/blackbox_exporter/config.yml"
+      output_dir: "blackbox-exporter"
+
+
+# Manual Documentation Processing
+manual_documentation:
+  enabled: true
+  manual_docs_directory: "infrastructure-docs/manual"
+
+  # File discovery settings
+  supported_formats: [".json"]
+  recursive_search: true
+
+  # Processing settings
+  create_entities: true
+  validate_schema: true
+
+  # Entity creation rules
+  entity_creation:
+    hardware_specification:
+      enabled: true
+      entity_type: "physical_system"
+      key_field: "system_name"
+
+    network_topology:
+      enabled: true
+      entity_type: "network_infrastructure"
+      key_field: "network_name"
+
+    operational_procedures:
+      enabled: true
+      entity_type: "documentation"
+      key_field: "procedure_name"
+
+rag_processing:
+  enabled: true
+  output_directory: "rag_output"
+  save_intermediate: true
+  parallel_processing: true
+  max_workers: 4
+
+  # Enhanced LLM Configuration
+  llm:
+    # Primary LLM configuration
+    type: "ollama"  # Options: "openai", "local", "ollama", "lmstudio", "textgen"
+
+    # Local LLM settings (Ollama recommended)
+    local:
+      base_url: "http://10.30.0.142:11434"
+      model: "llama3.2:3b"
+      timeout: 60
+
+    # Alternative local LLM configurations
+    lmstudio:
+      base_url: "http://10.20.0.4:1234/v1"  # LM Studio default
+      model: "local-model"  # Whatever model you load
+      timeout: 60
+
+    textgen:
+      base_url: "http://10.20.0.4:5000"
+      model: "text-generation-webui"
+      timeout: 60
+
+    # Commercial LLM settings
+    openai:
+      api_key_env: "OPENAI_API_KEY"  # Environment variable name
+      model: "gpt-3.5-turbo"
+      base_url: "https://api.openai.com/v1"  # Default, can override for proxies
+      timeout: 30
+
+    anthropic:
+      api_key_env: "ANTHROPIC_API_KEY"
+      model: "claude-3-haiku-20240307"
+      base_url: "https://api.anthropic.com"
+      timeout: 30
+
+    # Common LLM parameters
+    batch_size: 5
+    max_tokens: 150
+    temperature: 0.1
+
+    # Fallback configuration
+    fallback_to_rules: true  # Use rule-based tags if LLM fails
+
+    # Retry configuration
+    max_retries: 3
+    retry_delay: 2  # seconds
+
+  # Container Processing (unchanged)
+  container_processor:
+    enabled: true
+    enable_llm_tagging: true
+    I_count: 400        # Maximum words per document
+    min_content_length: 10     # Minimum characters per document
+    cleaning_rules:
+      container:
+        - "custom_temporal_field"
+
+  manual_docs_processor:
+    enabled: true
+    manual_docs_dir: "infrastructure-docs/manual"
+    validate_schema: true
+    create_entities: true
+    max_word_count: 400        # Maximum words per document
+    min_content_length: 10     # Minimum characters per document
+
+  # Server processor
+  server_processor:
+    enabled: true
+    enable_llm_tagging: true
+    collected_data_path: "collected_data"
+    max_word_count: 400        # Maximum words per document
+    min_content_length: 10     # Minimum characters per document
+
+  # Storage processor
+  storage_processor:
+    enabled: true
+    enable_llm_tagging: true
+    collected_data_path: "collected_data"
+    max_word_count: 400        # Maximum words per document
+    min_content_length: 10     # Minimum characters per document
+
+  # Future processors
+  host_processor:
+    enabled: true
+    enable_llm_tagging: true
+
+  service_processor:
+    enabled: true
+    enable_llm_tagging: true
+

@@ -1,8 +1,14 @@
 # Configuration files with sensitive data
-config/systems.yml
-src/config/systems.yml
+# config/systems.yml  # Temporarily commented to commit Jenkins version
+# src/config/systems.yml  # Temporarily commented to commit Jenkins version
 *.yml
 *.yaml
+
+# Exception: Allow schema definition files (these are version controlled)
+!schema/*.yml
+!schema/*.yaml
+# Exception: Allow systems.yml to be committed (for Jenkins)
+!src/config/systems.yml
 
 # SSH keys and secrets
 *.pem
