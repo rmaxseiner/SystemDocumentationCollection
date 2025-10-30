@@ -1,0 +1,959 @@
+# Hardware Specification Entity Schema
+# Defines the structure for hardware_specification documents in rag_data.json
+
+entity_type: hardware_specification
+description: Hardware specification entity for physical servers, workstations, and network equipment
+
+# Root level fields
+root:
+  id:
+    type: string
+    required: true
+    pattern: "^hardware_spec_[a-zA-Z0-9_-]+$"
+    description: "Unique identifier in format: hardware_spec_{hostname}"
+    example: "hardware_spec_unraid-server"
+
+  type:
+    type: string
+    required: true
+    enum: [hardware_specification]
+    description: "Entity type discriminator"
+
+# Tier 1: Vector Search Content
+tier1:
+  title:
+    type: string
+    required: true
+    description: "Human-readable title for the hardware specification"
+    example: "Hardware Specifications - unraid-server"
+
+  content:
+    type: string
+    required: true
+    min_length: 50
+    description: "Rich description for vector matching including case, PSU, cooling, thermal management"
+
+# Tier 2: Summary Metadata
+tier2:
+  metadata:
+    type: object
+    required: true
+    fields:
+      # Identity
+      hostname:
+        type: string
+        required: true
+        description: "Server hostname"
+
+      specification_type:
+        type: string
+        required: true
+        enum: [physical_server, workstation, network_equipment]
+        description: "Type of system being specified"
+
+      # Quick Reference (for filtering/searching)
+      case_model:
+        type: string
+        required: false
+        nullable: true
+        description: "Case model"
+        example: "Rosewill Viper Z"
+
+      case_form_factor:
+        type: string
+        required: false
+        nullable: true
+        description: "Case form factor"
+        examples: ["Mid Tower", "Full Tower", "1U", "2U", "Mini Tower", "Desktop"]
+
+      psu_manufacturer:
+        type: string
+        required: false
+        nullable: true
+        description: "Power supply manufacturer"
+        example: "Corsair"
+
+      psu_model:
+        type: string
+        required: false
+        nullable: true
+        description: "Power supply model"
+        example: "CX550M"
+
+      psu_wattage:
+        type: integer
+        required: false
+        nullable: true
+        description: "Power supply wattage"
+        example: 550
+
+      psu_efficiency:
+        type: string
+        required: false
+        nullable: true
+        description: "Power supply efficiency rating"
+        examples: ["80+ Bronze", "80+ Silver", "80+ Gold", "80+ Platinum", "80+ Titanium"]
+
+      # Cooling Summary
+      total_fans:
+        type: integer
+        required: false
+        nullable: true
+        description: "Total number of fans"
+        example: 10
+
+      controlled_fans:
+        type: integer
+        required: false
+        nullable: true
+        description: "Number of controlled fans (BIOS/software)"
+        example: 8
+
+      cpu_cooler_type:
+        type: string
+        required: false
+        nullable: true
+        enum: [stock, air, aio_liquid, custom_loop]
+        description: "Type of CPU cooler"
+
+      # Physical
+      has_modifications:
+        type: boolean
+        required: true
+        description: "Whether system has been modified from stock"
+
+      hot_swap_capable:
+        type: boolean
+        required: false
+        nullable: true
+        description: "Whether system supports hot-swappable drives"
+
+      # Documentation Status
+      documented_at:
+        type: string
+        required: true
+        format: iso8601
+        description: "ISO 8601 timestamp of when first documented"
+
+      last_updated:
+        type: string
+        required: true
+        format: iso8601
+        description: "ISO 8601 timestamp of last update to specs"
+
+# Tier 3: Detailed Information
+tier3:
+  details:
+    type: object
+    required: true
+    fields:
+      # Case & Physical Housing
+      case:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          manufacturer:
+            type: string
+            required: false
+            nullable: true
+            description: "Case manufacturer"
+
+          model:
+            type: string
+            required: true
+            description: "Case model"
+
+          model_full:
+            type: string
+            required: false
+            nullable: true
+            description: "Full case model name"
+
+          form_factor:
+            type: string
+            required: false
+            nullable: true
+            description: "Case form factor"
+
+          color:
+            type: string
+            required: false
+            nullable: true
+            description: "Case color"
+
+          dimensions_mm:
+            type: object
+            required: false
+            nullable: true
+            fields:
+              height:
+                type: integer
+                required: false
+                nullable: true
+              width:
+                type: integer
+                required: false
+                nullable: true
+              depth:
+                type: integer
+                required: false
+                nullable: true
+
+          weight_kg:
+            type: float
+            required: false
+            nullable: true
+            description: "Case weight in kilograms"
+
+          material:
+            type: string
+            required: false
+            nullable: true
+            description: "Primary case material"
+
+          window:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Whether case has side panel window"
+
+          modifications:
+            type: array
+            required: false
+            nullable: true
+            description: "List of modifications made to case"
+
+          notes:
+            type: string
+            required: false
+            nullable: true
+            description: "Additional notes about case"
+
+      # Power Supply Unit
+      power_supply:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          manufacturer:
+            type: string
+            required: true
+            description: "PSU manufacturer"
+
+          model:
+            type: string
+            required: true
+            description: "PSU model"
+
+          model_full:
+            type: string
+            required: false
+            nullable: true
+            description: "Full PSU model name"
+
+          rated_wattage:
+            type: integer
+            required: true
+            description: "Rated wattage"
+
+          efficiency_rating:
+            type: string
+            required: true
+            nullable: true
+            description: "Efficiency rating"
+
+          modular:
+            type: boolean
+            required: true
+            description: "Whether PSU is modular"
+
+          form_factor:
+            type: string
+            required: true
+            description: "PSU form factor"
+
+          pcie_connectors:
+            type: integer
+            required: false
+            nullable: true
+            description: "Number of PCIe power connectors"
+
+          sata_connectors:
+            type: integer
+            required: false
+            nullable: true
+            description: "Number of SATA power connectors"
+
+          molex_connectors:
+            type: integer
+            required: false
+            nullable: true
+            description: "Number of Molex connectors"
+
+          cables_included:
+            type: array
+            required: false
+            nullable: true
+            description: "List of included cables"
+
+          fan_size_mm:
+            type: integer
+            required: false
+            nullable: true
+            description: "PSU fan size in millimeters"
+
+          warranty_years:
+            type: integer
+            required: false
+            nullable: true
+            description: "Warranty period in years"
+
+          notes:
+            type: string
+            required: false
+            nullable: true
+            description: "Additional PSU notes"
+
+      # Cooling System
+      cooling:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          # CPU Cooler
+          cpu_cooler:
+            type: object
+            required: false
+            nullable: true
+            fields:
+              type:
+                type: string
+                required: true
+                enum: [stock, air, aio_liquid, custom_loop]
+                description: "Type of CPU cooler"
+
+              manufacturer:
+                type: string
+                required: false
+                nullable: true
+                description: "Cooler manufacturer"
+
+              model:
+                type: string
+                required: false
+                nullable: true
+                description: "Cooler model"
+
+              tdp_rating_watts:
+                type: integer
+                required: false
+                nullable: true
+                description: "TDP rating in watts"
+
+              fan_size_mm:
+                type: integer
+                required: false
+                nullable: true
+                description: "Fan size in millimeters"
+
+              fan_count:
+                type: integer
+                required: false
+                nullable: true
+                description: "Number of fans"
+
+              rgb:
+                type: boolean
+                required: false
+                nullable: true
+                description: "Whether cooler has RGB lighting"
+
+              controlled_by:
+                type: string
+                required: false
+                nullable: true
+                description: "What controls the cooler"
+
+              notes:
+                type: string
+                required: false
+                nullable: true
+                description: "Additional cooler notes"
+
+          # Case Fans
+          case_fans:
+            type: object
+            required: false
+            nullable: true
+            fields:
+              total_fans:
+                type: integer
+                required: true
+                nullable: true
+                description: "Total number of case fans"
+
+              controlled_fans:
+                type: integer
+                required: false
+                nullable: true
+                description: "Number of controlled fans"
+
+              uncontrolled_fans:
+                type: integer
+                required: false
+                nullable: true
+                description: "Number of uncontrolled fans"
+
+              fan_headers_used:
+                type: integer
+                required: false
+                nullable: true
+                description: "Number of fan headers used"
+
+              fan_headers_total:
+                type: integer
+                required: false
+                nullable: true
+                description: "Total fan headers on motherboard"
+
+              # Detailed Fan Layout
+              fans:
+                type: array
+                required: false
+                nullable: true
+                description: "Detailed fan configuration"
+                item_schema:
+                  type: object
+                  fields:
+                    location:
+                      type: string
+                      required: true
+                      description: "Fan location"
+
+                    size_mm:
+                      type: integer
+                      required: false
+                      nullable: true
+                      description: "Fan size in millimeters"
+
+                    count:
+                      type: integer
+                      required: true
+                      description: "Number of fans in this location"
+
+                    controlled:
+                      type: boolean
+                      required: false
+                      nullable: true
+                      description: "Whether fan is controlled"
+
+                    controller:
+                      type: string
+                      required: false
+                      nullable: true
+                      description: "What controls the fan"
+
+                    rpm_range:
+                      type: string
+                      required: false
+                      nullable: true
+                      description: "RPM range"
+
+                    purpose:
+                      type: string
+                      required: false
+                      nullable: true
+                      description: "Purpose of fan"
+
+                    manufacturer:
+                      type: string
+                      required: false
+                      nullable: true
+                      description: "Fan manufacturer"
+
+                    model:
+                      type: string
+                      required: false
+                      nullable: true
+                      description: "Fan model"
+
+              # Fan Controller
+              fan_controller:
+                type: object
+                required: false
+                nullable: true
+                fields:
+                  type:
+                    type: string
+                    required: false
+                    nullable: true
+                    description: "Type of fan controller"
+
+                  manufacturer:
+                    type: string
+                    required: false
+                    nullable: true
+                    description: "Controller manufacturer"
+
+                  model:
+                    type: string
+                    required: false
+                    nullable: true
+                    description: "Controller model"
+
+                  channels:
+                    type: integer
+                    required: false
+                    nullable: true
+                    description: "Number of controllable channels"
+
+          # Cooling Zones & Strategy
+          cooling_zones:
+            type: array
+            required: false
+            nullable: true
+            description: "List of cooling zones"
+
+          airflow_direction:
+            type: string
+            required: false
+            nullable: true
+            description: "Primary airflow direction"
+
+          positive_pressure:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Whether case has positive pressure"
+
+          thermal_notes:
+            type: string
+            required: false
+            nullable: true
+            description: "Additional thermal management notes"
+
+      # Storage Bays & Capacity
+      storage_bays:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          internal_35_inch:
+            type: integer
+            required: false
+            nullable: true
+            description: "Number of internal 3.5\" bays"
+
+          internal_25_inch:
+            type: integer
+            required: false
+            nullable: true
+            description: "Number of internal 2.5\" bays"
+
+          external_525_inch:
+            type: integer
+            required: false
+            nullable: true
+            description: "Number of external 5.25\" bays"
+
+          hot_swap_35_inch:
+            type: integer
+            required: false
+            nullable: true
+            description: "Number of hot-swap 3.5\" bays"
+
+          hot_swap_25_inch:
+            type: integer
+            required: false
+            nullable: true
+            description: "Number of hot-swap 2.5\" bays"
+
+          m2_slots:
+            type: integer
+            required: false
+            nullable: true
+            description: "Number of M.2 slots"
+
+          m2_form_factors:
+            type: array
+            required: false
+            nullable: true
+            description: "Supported M.2 form factors"
+
+          m2_interfaces:
+            type: array
+            required: false
+            nullable: true
+            description: "Supported M.2 interfaces"
+
+          bay_notes:
+            type: string
+            required: false
+            nullable: true
+            description: "Additional bay notes"
+
+          total_capacity:
+            type: string
+            required: false
+            nullable: true
+            description: "Total storage capacity description"
+
+      # Expansion Slots
+      expansion:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          pcie_x16:
+            type: integer
+            required: false
+            nullable: true
+            description: "Number of PCIe x16 slots"
+
+          pcie_x8:
+            type: integer
+            required: false
+            nullable: true
+            description: "Number of PCIe x8 slots"
+
+          pcie_x4:
+            type: integer
+            required: false
+            nullable: true
+            description: "Number of PCIe x4 slots"
+
+          pcie_x1:
+            type: integer
+            required: false
+            nullable: true
+            description: "Number of PCIe x1 slots"
+
+          m2_pcie_adapters:
+            type: integer
+            required: false
+            nullable: true
+            description: "Number of M.2 to PCIe adapters"
+
+          slots_used:
+            type: integer
+            required: false
+            nullable: true
+            description: "Number of slots currently used"
+
+          slots_available:
+            type: integer
+            required: false
+            nullable: true
+            description: "Number of available slots"
+
+          expansion_notes:
+            type: string
+            required: false
+            nullable: true
+            description: "Additional expansion notes"
+
+      # Front Panel & I/O
+      front_panel:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          usb_ports:
+            type: string
+            required: false
+            nullable: true
+            description: "USB port configuration"
+
+          usb_c:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Whether front panel has USB-C"
+
+          audio_jacks:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Whether front panel has audio jacks"
+
+          card_reader:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Whether front panel has card reader"
+
+          optical_drive:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Whether case has optical drive"
+
+          reset_button:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Whether front panel has reset button"
+
+          power_button:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Whether front panel has power button"
+
+          led_indicators:
+            type: array
+            required: false
+            nullable: true
+            description: "List of LED indicators"
+
+          notes:
+            type: string
+            required: false
+            nullable: true
+            description: "Additional front panel notes"
+
+      # RGB & Aesthetics
+      aesthetics:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          rgb_lighting:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Whether system has RGB lighting"
+
+          rgb_zones:
+            type: array
+            required: false
+            nullable: true
+            description: "RGB lighting zones"
+
+          rgb_controller:
+            type: string
+            required: false
+            nullable: true
+            description: "RGB controller type"
+
+          tempered_glass:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Whether case has tempered glass"
+
+          mesh_front:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Whether case has mesh front"
+
+          color_scheme:
+            type: string
+            required: false
+            nullable: true
+            description: "Color scheme"
+
+          notes:
+            type: string
+            required: false
+            nullable: true
+            description: "Additional aesthetic notes"
+
+      # Noise & Acoustics
+      acoustics:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          noise_dampening:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Whether case has noise dampening"
+
+          sound_dampening_material:
+            type: string
+            required: false
+            nullable: true
+            description: "Sound dampening material"
+
+          typical_noise_level_db:
+            type: integer
+            required: false
+            nullable: true
+            description: "Typical noise level in decibels"
+
+          notes:
+            type: string
+            required: false
+            nullable: true
+            description: "Additional acoustic notes"
+
+      # Physical Dimensions & Weight
+      physical:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          dimensions_mm:
+            type: object
+            required: false
+            nullable: true
+            fields:
+              height:
+                type: integer
+                required: false
+                nullable: true
+              width:
+                type: integer
+                required: false
+                nullable: true
+              depth:
+                type: integer
+                required: false
+                nullable: true
+
+          weight_kg:
+            type: float
+            required: false
+            nullable: true
+            description: "Weight in kilograms"
+
+          rack_mountable:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Whether system is rack mountable"
+
+          rack_units:
+            type: integer
+            required: false
+            nullable: true
+            description: "Rack units (1U, 2U, etc.)"
+
+          notes:
+            type: string
+            required: false
+            nullable: true
+            description: "Additional physical notes"
+
+      # Purchase & Warranty
+      documentation:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          purchase_date:
+            type: string
+            required: false
+            nullable: true
+            format: iso8601
+            description: "Purchase date"
+
+          purchase_price_usd:
+            type: float
+            required: false
+            nullable: true
+            description: "Purchase price in USD"
+
+          purchase_location:
+            type: string
+            required: false
+            nullable: true
+            description: "Where purchased"
+
+          order_number:
+            type: string
+            required: false
+            nullable: true
+            description: "Order number"
+
+          warranty_expires:
+            type: string
+            required: false
+            nullable: true
+            format: iso8601
+            description: "Warranty expiration date"
+
+          warranty_provider:
+            type: string
+            required: false
+            nullable: true
+            description: "Warranty provider"
+
+          receipts_location:
+            type: string
+            required: false
+            nullable: true
+            description: "Location of receipts"
+
+          manuals_location:
+            type: string
+            required: false
+            nullable: true
+            description: "Location of manuals"
+
+          photos_location:
+            type: string
+            required: false
+            nullable: true
+            description: "Location of photos"
+
+          notes:
+            type: string
+            required: false
+            nullable: true
+            description: "Additional documentation notes"
+
+      # Assembly & Build Notes
+      build:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          assembled_date:
+            type: string
+            required: false
+            nullable: true
+            format: iso8601
+            description: "Assembly date"
+
+          assembled_by:
+            type: string
+            required: false
+            nullable: true
+            description: "Who assembled the system"
+
+          build_time_hours:
+            type: float
+            required: false
+            nullable: true
+            description: "Time to build in hours"
+
+          build_difficulty:
+            type: string
+            required: false
+            nullable: true
+            enum: [Easy, Moderate, Difficult]
+            description: "Build difficulty"
+
+          issues_encountered:
+            type: array
+            required: false
+            nullable: true
+            description: "Issues encountered during build"
+
+          build_notes:
+            type: string
+            required: false
+            nullable: true
+            description: "Additional build notes"
+
+      # General Notes
+      notes:
+        type: string
+        required: false
+        nullable: true
+        description: "General notes about hardware specification"

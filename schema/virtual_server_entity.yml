@@ -1,0 +1,428 @@
+# Virtual Server Entity Schema
+# Defines the structure for virtual_server documents (VMs and LXC containers) in rag_data.json
+
+entity_type: virtual_server
+description: Virtual machine or container entity (VMs from KVM/Proxmox, LXC containers)
+
+# Root level fields
+root:
+  id:
+    type: string
+    required: true
+    pattern: "^virtual_server_[a-zA-Z0-9_.-]+$"
+    description: "Unique identifier in format: virtual_server_{name}"
+    example: "virtual_server_ansible"
+
+  type:
+    type: string
+    required: true
+    enum: [virtual_server]
+    description: "Entity type discriminator"
+
+# Tier 1: Vector Search Content
+tier1:
+  title:
+    type: string
+    required: true
+    description: "Human-readable title"
+    example: "ansible LXC Container"
+
+  content:
+    type: string
+    required: true
+    min_length: 50
+    description: "Rich description for vector matching including virtualization type, resources, network, purpose"
+
+# Tier 2: Summary Metadata
+tier2:
+  metadata:
+    type: object
+    required: true
+    fields:
+      # Identity
+      name:
+        type: string
+        required: true
+        description: "Container/VM name (hostname)"
+
+      system_type:
+        type: string
+        required: true
+        enum: ["linux-container", "virtual-machine"]
+        description: "System classification"
+
+      virtualization_type:
+        type: string
+        required: true
+        description: "Virtualization technology"
+        examples: ["lxc", "qemu", "kvm", "vmware", "hyperv"]
+
+      # Resource Allocation
+      cpu_vcpus:
+        type: integer
+        required: true
+        description: "Allocated virtual CPUs"
+
+      memory_allocated_gb:
+        type: float
+        required: true
+        description: "Allocated RAM in GB"
+
+      storage_allocated_gb:
+        type: float
+        required: true
+        description: "Total allocated storage in GB"
+
+      # Network
+      primary_ip:
+        type: string
+        required: false
+        nullable: true
+        description: "Primary IP address"
+
+      bridge:
+        type: string
+        required: false
+        nullable: true
+        description: "Network bridge"
+        examples: ["vmbr0", "docker0"]
+
+      vlan:
+        type: integer
+        required: false
+        nullable: true
+        description: "VLAN ID"
+
+      # State
+      state:
+        type: string
+        required: true
+        description: "Current operational state"
+        enum: ["running", "stopped", "paused"]
+
+      # Workload
+      container_count:
+        type: integer
+        required: false
+        nullable: true
+        description: "Number of Docker containers hosted (if applicable)"
+
+      # Operating System
+      os_distribution:
+        type: string
+        required: false
+        nullable: true
+        description: "OS distribution"
+        examples: ["Ubuntu", "Debian", "Alpine"]
+
+      os_version:
+        type: string
+        required: false
+        nullable: true
+        description: "OS version"
+
+      # Metadata
+      last_updated:
+        type: string
+        required: true
+        format: iso8601
+        description: "ISO 8601 timestamp"
+
+# Tier 3: Detailed Information
+tier3:
+  details:
+    type: object
+    required: true
+    fields:
+      # CPU Details
+      cpu:
+        type: object
+        required: true
+        fields:
+          vcpus:
+            type: integer
+            required: true
+            description: "Number of virtual CPUs"
+          cpu_model:
+            type: string
+            required: false
+            nullable: true
+            description: "CPU model seen by guest"
+          cpu_limit:
+            type: integer
+            required: false
+            nullable: true
+            description: "CPU limit percentage"
+          cpu_units:
+            type: integer
+            required: false
+            nullable: true
+            description: "Relative CPU weight (Proxmox default: 1024)"
+          cpu_sockets:
+            type: integer
+            required: false
+            nullable: true
+            description: "Number of CPU sockets (VMs)"
+          cpu_cores_per_socket:
+            type: integer
+            required: false
+            nullable: true
+            description: "Cores per socket (VMs)"
+          pinning:
+            type: array
+            required: false
+            nullable: true
+            item_type: integer
+            description: "Pinned to physical cores"
+
+      # Memory Details
+      memory:
+        type: object
+        required: true
+        fields:
+          allocated_gb:
+            type: float
+            required: true
+            description: "Allocated memory in GB"
+          swap_gb:
+            type: float
+            required: false
+            nullable: true
+            description: "Allocated swap in GB"
+          balloon_enabled:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Memory balloon for dynamic allocation (VMs)"
+          shares:
+            type: integer
+            required: false
+            nullable: true
+            description: "Memory priority/weight"
+
+      # Storage Details
+      storage:
+        type: object
+        required: true
+        fields:
+          root_disk:
+            type: object
+            required: true
+            fields:
+              size_gb:
+                type: float
+                required: true
+              storage_pool:
+                type: string
+                required: true
+              storage_path:
+                type: string
+                required: false
+                nullable: true
+              format:
+                type: string
+                required: false
+                nullable: true
+                examples: ["raw", "qcow2", "subvol"]
+              cache_mode:
+                type: string
+                required: false
+                nullable: true
+                examples: ["none", "writeback", "writethrough"]
+
+          mounts:
+            type: array
+            required: false
+            nullable: true
+            description: "Bind mounts (LXC containers)"
+            item_schema:
+              type: object
+              fields:
+                mount_point:
+                  type: string
+                  required: true
+                source_path:
+                  type: string
+                  required: true
+                storage_pool:
+                  type: string
+                  required: false
+                  nullable: true
+                readonly:
+                  type: boolean
+                  required: true
+                backup:
+                  type: boolean
+                  required: false
+                  nullable: true
+
+          additional_disks:
+            type: array
+            required: false
+            nullable: true
+            description: "Additional virtual disks (VMs)"
+            item_schema:
+              type: object
+              fields:
+                device:
+                  type: string
+                  required: true
+                size_gb:
+                  type: float
+                  required: true
+                storage_pool:
+                  type: string
+                  required: true
+                format:
+                  type: string
+                  required: false
+                  nullable: true
+                cache_mode:
+                  type: string
+                  required: false
+                  nullable: true
+
+      # Network Interfaces
+      network_interfaces:
+        type: array
+        required: true
+        description: "Virtual network interfaces"
+        item_schema:
+          type: object
+          fields:
+            interface:
+              type: string
+              required: true
+            mac_address:
+              type: string
+              required: false
+              nullable: true
+            model:
+              type: string
+              required: false
+              nullable: true
+              examples: ["virtio", "e1000", "veth"]
+            bridge:
+              type: string
+              required: true
+            vlan:
+              type: integer
+              required: false
+              nullable: true
+            firewall_enabled:
+              type: boolean
+              required: false
+              nullable: true
+            rate_limit_mbps:
+              type: integer
+              required: false
+              nullable: true
+            ip_addresses:
+              type: array
+              required: true
+              item_schema:
+                type: object
+                fields:
+                  ip_address:
+                    type: string
+                    required: true
+                  type:
+                    type: string
+                    required: true
+                    enum: ["ipv4", "ipv6"]
+                  gateway:
+                    type: string
+                    required: false
+                    nullable: true
+                  dhcp:
+                    type: boolean
+                    required: false
+                    nullable: true
+
+      # Operating System
+      os:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          distribution:
+            type: string
+            required: false
+            nullable: true
+          version:
+            type: string
+            required: false
+            nullable: true
+          kernel_version:
+            type: string
+            required: false
+            nullable: true
+          architecture:
+            type: string
+            required: false
+            nullable: true
+
+      # Platform Details
+      platform:
+        type: object
+        required: true
+        fields:
+          platform_type:
+            type: string
+            required: true
+            examples: ["proxmox", "vmware", "hyperv"]
+          vmid:
+            type: integer
+            required: false
+            nullable: true
+            description: "Proxmox VM/CT ID"
+          node:
+            type: string
+            required: false
+            nullable: true
+            description: "Cluster node name"
+          template_source:
+            type: string
+            required: false
+            nullable: true
+
+          # LXC-specific
+          features:
+            type: array
+            required: false
+            nullable: true
+            item_type: string
+            examples: [["nesting", "fuse"]]
+          unprivileged:
+            type: boolean
+            required: false
+            nullable: true
+
+          # VM-specific
+          bios:
+            type: string
+            required: false
+            nullable: true
+            examples: ["seabios", "ovmf"]
+          machine_type:
+            type: string
+            required: false
+            nullable: true
+            examples: ["q35", "i440fx"]
+
+          # Boot/Startup
+          protection:
+            type: boolean
+            required: false
+            nullable: true
+          onboot:
+            type: boolean
+            required: true
+          startup_order:
+            type: integer
+            required: false
+            nullable: true
+          startup_delay:
+            type: integer
+            required: false
+            nullable: true

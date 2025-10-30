@@ -1,0 +1,467 @@
+# Proxy Host Entity Schema
+# Defines the structure for proxy host documents (Nginx Proxy Manager) in rag_data.json
+
+entity_type: proxy_host
+description: Proxy host entity representing reverse proxy configurations in Nginx Proxy Manager
+
+# Root level fields
+root:
+  id:
+    type: string
+    required: true
+    pattern: "^proxy_[a-z0-9-]+$"
+    description: "Unique identifier in format: proxy_{domain_slug}"
+    example: "proxy_prometheus-maxseiner-casa"
+
+  type:
+    type: string
+    required: true
+    enum: [proxy_host]
+    description: "Entity type discriminator"
+
+# Tier 1: Vector Search Content
+tier1:
+  title:
+    type: string
+    required: true
+    description: "Human-readable title"
+    example: "Reverse Proxy - prometheus.maxseiner.casa"
+
+  content:
+    type: string
+    required: true
+    min_length: 50
+    description: "Rich description for vector matching"
+    example: "Nginx Proxy Manager reverse proxy configuration for prometheus.maxseiner.casa. Routes HTTPS traffic from public domain to backend Prometheus monitoring service at 10.20.0.83:9090. SSL termination with Let's Encrypt wildcard certificate for *.maxseiner.casa. HSTS enabled for security. HTTP/2 support enabled. Block common exploits enabled."
+
+# Tier 2: Summary Metadata
+tier2:
+  metadata:
+    type: object
+    required: true
+    fields:
+      # Domain Configuration
+      domain:
+        type: string
+        required: true
+        description: "Primary domain name"
+        example: "prometheus.maxseiner.casa"
+
+      domain_names:
+        type: array
+        required: false
+        nullable: true
+        description: "All domain names (including aliases)"
+        items:
+          type: string
+        example: ["prometheus.maxseiner.casa", "prom.maxseiner.casa"]
+
+      # Backend Configuration (for linking to services)
+      backend_host:
+        type: string
+        required: true
+        description: "Backend server IP or hostname"
+        example: "10.20.0.83"
+
+      backend_port:
+        type: integer
+        required: true
+        description: "Backend server port"
+        example: 9090
+
+      backend_protocol:
+        type: string
+        required: true
+        enum: ["http", "https"]
+        description: "Backend protocol"
+
+      # SSL
+      ssl_enabled:
+        type: boolean
+        required: true
+        description: "Whether SSL/TLS is enabled"
+
+      force_ssl:
+        type: boolean
+        required: false
+        nullable: true
+        description: "Whether HTTP is redirected to HTTPS"
+
+      certificate_id:
+        type: integer
+        required: false
+        nullable: true
+        description: "NPM internal certificate ID"
+        example: 9
+
+      # Status
+      enabled:
+        type: boolean
+        required: true
+        description: "Whether proxy host is enabled"
+
+      npm_id:
+        type: integer
+        required: false
+        nullable: true
+        description: "NPM internal proxy host ID"
+        example: 3
+
+      # Metadata
+      created_at:
+        type: string
+        required: false
+        nullable: true
+        format: iso8601
+        description: "When proxy host was created"
+
+      last_updated:
+        type: string
+        required: true
+        format: iso8601
+        description: "When entity was last updated"
+
+# Tier 3: Detailed Information
+tier3:
+  details:
+    type: object
+    required: true
+    fields:
+      # Frontend (Public-Facing)
+      frontend:
+        type: object
+        required: true
+        fields:
+          domain_names:
+            type: array
+            required: true
+            description: "All served domain names"
+            items:
+              type: string
+
+          scheme:
+            type: string
+            required: true
+            enum: ["http", "https", "both"]
+            description: "Protocol scheme"
+
+          listen_port:
+            type: integer
+            required: false
+            nullable: true
+            description: "Primary listen port"
+            example: 443
+
+          force_ssl:
+            type: boolean
+            required: true
+            description: "HTTP to HTTPS redirect enabled"
+
+          hsts_enabled:
+            type: boolean
+            required: false
+            nullable: true
+            description: "HTTP Strict Transport Security enabled"
+
+          hsts_subdomains:
+            type: boolean
+            required: false
+            nullable: true
+            description: "HSTS applies to subdomains"
+
+          http2_support:
+            type: boolean
+            required: false
+            nullable: true
+            description: "HTTP/2 protocol support"
+
+          ipv6:
+            type: boolean
+            required: false
+            nullable: true
+            description: "IPv6 support enabled"
+
+      # Backend (Where Traffic is Forwarded)
+      backend:
+        type: object
+        required: true
+        fields:
+          forward_host:
+            type: string
+            required: true
+            description: "Backend IP or hostname"
+            example: "10.20.0.83"
+
+          forward_port:
+            type: integer
+            required: true
+            description: "Backend port"
+            example: 9090
+
+          forward_scheme:
+            type: string
+            required: true
+            enum: ["http", "https"]
+            description: "Backend protocol"
+
+          preserve_host:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Preserve client Host header"
+
+          custom_locations:
+            type: array
+            required: false
+            nullable: true
+            description: "Custom location blocks"
+            items:
+              type: object
+              fields:
+                path:
+                  type: string
+                  required: true
+                forward_host:
+                  type: string
+                  required: false
+                  nullable: true
+                forward_port:
+                  type: integer
+                  required: false
+                  nullable: true
+                forward_scheme:
+                  type: string
+                  required: false
+                  nullable: true
+
+      # SSL Certificate
+      ssl:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          certificate_id:
+            type: integer
+            required: false
+            nullable: true
+            description: "NPM certificate ID"
+
+          certificate_name:
+            type: string
+            required: false
+            nullable: true
+            description: "Certificate common name"
+            example: "*.maxseiner.casa"
+
+          provider:
+            type: string
+            required: false
+            nullable: true
+            enum: ["letsencrypt", "cloudflare", "custom"]
+            description: "Certificate provider"
+
+          domain_names:
+            type: array
+            required: false
+            nullable: true
+            description: "Domains covered by certificate"
+            items:
+              type: string
+
+          expires:
+            type: string
+            required: false
+            nullable: true
+            format: iso8601_date
+            description: "Certificate expiration date"
+
+          auto_renew:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Automatic renewal enabled"
+
+          certificate_path:
+            type: string
+            required: false
+            nullable: true
+            description: "Path to certificate file"
+
+          key_path:
+            type: string
+            required: false
+            nullable: true
+            description: "Path to private key file"
+
+          intermediate_path:
+            type: string
+            required: false
+            nullable: true
+            description: "Path to intermediate certificate"
+
+      # Caching
+      caching:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          enabled:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Caching enabled"
+
+          cache_time:
+            type: integer
+            required: false
+            nullable: true
+            description: "Cache duration in seconds"
+
+          cache_valid_codes:
+            type: array
+            required: false
+            nullable: true
+            description: "HTTP codes to cache"
+            items:
+              type: integer
+
+      # Access Control
+      access:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          auth_enabled:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Authentication required"
+
+          auth_type:
+            type: string
+            required: false
+            nullable: true
+            enum: ["basic", "oauth", "authentik"]
+            description: "Authentication method"
+
+          auth_users:
+            type: array
+            required: false
+            nullable: true
+            description: "Authorized users"
+            items:
+              type: string
+
+          allow_ips:
+            type: array
+            required: false
+            nullable: true
+            description: "Allowed IP addresses/ranges"
+            items:
+              type: string
+
+          deny_ips:
+            type: array
+            required: false
+            nullable: true
+            description: "Denied IP addresses/ranges"
+            items:
+              type: string
+
+          access_list_id:
+            type: integer
+            required: false
+            nullable: true
+            description: "NPM access list ID"
+
+      # Advanced Settings
+      advanced:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          websocket_support:
+            type: boolean
+            required: false
+            nullable: true
+            description: "WebSocket support enabled"
+
+          block_exploits:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Common exploit blocking"
+
+          custom_nginx_config:
+            type: string
+            required: false
+            nullable: true
+            description: "Custom Nginx directives"
+
+          access_log_disabled:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Access logging disabled"
+
+          error_log_disabled:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Error logging disabled"
+
+      # Performance
+      performance:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          http2:
+            type: boolean
+            required: false
+            nullable: true
+            description: "HTTP/2 enabled"
+
+          gzip:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Gzip compression enabled"
+
+          client_max_body_size:
+            type: string
+            required: false
+            nullable: true
+            description: "Maximum request body size"
+            example: "100M"
+
+      # NPM Internal
+      npm_metadata:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          npm_id:
+            type: integer
+            required: false
+            nullable: true
+            description: "NPM internal ID"
+
+          owner_user_id:
+            type: integer
+            required: false
+            nullable: true
+            description: "NPM owner user ID"
+
+          is_deleted:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Soft delete flag"
+
+      # Notes
+      notes:
+        type: string
+        required: false
+        nullable: true
+        description: "Free-form notes about proxy configuration"

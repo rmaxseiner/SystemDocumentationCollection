@@ -1,0 +1,409 @@
+# Service Entity Schema
+# Defines the structure for service documents in rag_data.json
+
+entity_type: service
+description: Service entity representing logical applications/services in the infrastructure
+
+# Root level fields
+root:
+  id:
+    type: string
+    required: true
+    pattern: "^service_[a-zA-Z0-9_-]+$"
+    description: "Unique identifier in format: service_{name}"
+    example: "service_infrastructure-mcp"
+
+  type:
+    type: string
+    required: true
+    enum: [service]
+    description: "Entity type discriminator"
+
+# Tier 1: Vector Search Content
+tier1:
+  title:
+    type: string
+    required: true
+    description: "Human-readable title"
+    example: "Infrastructure MCP Service"
+
+  content:
+    type: string
+    required: true
+    min_length: 30
+    description: "Rich description for vector matching"
+    example: "Infrastructure MCP is a natural language interface for querying infrastructure documentation. Provides HTTP API accessible at infrastructure-mcp.maxseiner.casa. Single container service running on SCS-LLM-01. Uses ChromaDB for vector search of system configurations."
+
+# Tier 2: Summary Metadata
+tier2:
+  metadata:
+    type: object
+    required: true
+    fields:
+      # Identity
+      service_name:
+        type: string
+        required: true
+        description: "Service name"
+        example: "infrastructure-mcp"
+
+      service_type:
+        type: string
+        required: false
+        nullable: true
+        description: "Service category"
+        examples: ["api", "web-app", "dashboard", "media", "productivity", "automation", "monitoring", "database", "proxy"]
+
+      # Access Information
+      primary_url:
+        type: string
+        required: false
+        nullable: true
+        description: "Primary URL for accessing the service"
+        example: "https://infrastructure-mcp.maxseiner.casa"
+
+      primary_ip:
+        type: string
+        required: false
+        nullable: true
+        description: "Primary IP address (if no URL or for direct access)"
+        example: "10.20.0.162"
+
+      primary_port:
+        type: integer
+        required: false
+        nullable: true
+        description: "Primary port for access"
+        example: 8080
+
+      # Internal Binding (for proxy/routing linking)
+      bind_ip:
+        type: string
+        required: false
+        nullable: true
+        description: "IP address the service binds to internally"
+        example: "10.20.0.83"
+
+      bind_port:
+        type: integer
+        required: false
+        nullable: true
+        description: "Port the service listens on internally"
+        example: 9090
+
+      bind_protocol:
+        type: string
+        required: false
+        nullable: true
+        enum: ["http", "https", "tcp", "udp", "grpc"]
+        description: "Protocol the service uses"
+
+      access_type:
+        type: string
+        required: false
+        nullable: true
+        enum: ["web", "api", "ssh", "desktop-app", "cli", "database"]
+        description: "How users/systems access this service"
+
+      publicly_accessible:
+        type: boolean
+        required: false
+        nullable: true
+        description: "Whether service is accessible from public internet"
+
+      # Components (counts)
+      container_count:
+        type: integer
+        required: true
+        description: "Number of containers in this service"
+
+      virtual_server_count:
+        type: integer
+        required: false
+        nullable: true
+        description: "Number of VMs used by this service"
+        default: 0
+
+      configuration_count:
+        type: integer
+        required: false
+        nullable: true
+        description: "Number of configuration files related to service"
+        default: 0
+
+      # Service Properties
+      criticality:
+        type: string
+        required: false
+        nullable: true
+        enum: ["high", "medium", "low"]
+        description: "Service criticality level"
+
+      environment:
+        type: string
+        required: false
+        nullable: true
+        enum: ["production", "staging", "development", "test"]
+        description: "Environment/stage this service runs in"
+
+      owner:
+        type: string
+        required: false
+        nullable: true
+        description: "Team or person responsible for service"
+        example: "Infrastructure Team"
+
+      # Status (from containers)
+      status:
+        type: string
+        required: true
+        enum: ["running", "partially_running", "stopped", "unknown"]
+        description: "Overall service status"
+
+      # Container details
+      containers:
+        type: array
+        required: true
+        description: "List of container IDs that comprise this service"
+        items:
+          type: string
+
+      primary_container:
+        type: string
+        required: true
+        description: "ID of primary/main container"
+
+      # Additional metadata
+      hosted_by:
+        type: string
+        required: true
+        description: "Primary host running the service"
+
+      images:
+        type: array
+        required: false
+        nullable: true
+        description: "Docker images used by service"
+        items:
+          type: string
+
+      networks:
+        type: array
+        required: false
+        nullable: true
+        description: "Networks used by service"
+        items:
+          type: string
+
+      grouping_method:
+        type: string
+        required: true
+        description: "How containers were grouped into this service"
+        examples: ["compose_project", "name_prefix", "dependencies", "label", "network", "standalone"]
+
+      grouping_details:
+        type: object
+        required: false
+        nullable: true
+        description: "Additional details about grouping logic"
+
+      # Timestamps
+      last_updated:
+        type: string
+        required: true
+        format: iso8601
+        description: "When entity was last updated"
+
+# Tier 3: Detailed Information
+tier3:
+  details:
+    type: object
+    required: true
+    fields:
+      # Description
+      description:
+        type: string
+        required: false
+        nullable: true
+        description: "Full description of what the service does"
+
+      purpose:
+        type: string
+        required: false
+        nullable: true
+        description: "Why this service exists, what problem it solves"
+
+      # Authentication
+      authentication:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          required:
+            type: boolean
+            required: true
+            description: "Whether authentication is required"
+
+          method:
+            type: string
+            required: false
+            nullable: true
+            enum: ["sso", "local", "oauth", "api-key", "ldap", "none"]
+            description: "Authentication method"
+
+          sso_provider:
+            type: string
+            required: false
+            nullable: true
+            description: "SSO provider if using SSO"
+            example: "authentik"
+
+          notes:
+            type: string
+            required: false
+            nullable: true
+            description: "Additional authentication details"
+
+      # Service Properties
+      properties:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          owner:
+            type: string
+            required: false
+            nullable: true
+            description: "Team or person responsible"
+
+          maintainer:
+            type: string
+            required: false
+            nullable: true
+            description: "Primary maintainer"
+
+          criticality:
+            type: string
+            required: false
+            nullable: true
+            enum: ["high", "medium", "low"]
+
+          environment:
+            type: string
+            required: false
+            nullable: true
+            enum: ["production", "staging", "development", "test"]
+
+          version:
+            type: string
+            required: false
+            nullable: true
+            description: "Application version"
+
+          release_date:
+            type: string
+            required: false
+            nullable: true
+            format: iso8601
+            description: "When this version was deployed"
+
+          license:
+            type: string
+            required: false
+            nullable: true
+            description: "Software license"
+            examples: ["MIT", "GPL-3.0", "Apache-2.0", "Proprietary"]
+
+      # Documentation
+      documentation:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          readme_url:
+            type: string
+            required: false
+            nullable: true
+            description: "Link to README or getting started guide"
+
+          wiki_url:
+            type: string
+            required: false
+            nullable: true
+            description: "Link to wiki or comprehensive docs"
+
+          repository_url:
+            type: string
+            required: false
+            nullable: true
+            description: "Source code repository URL"
+
+          runbook_url:
+            type: string
+            required: false
+            nullable: true
+            description: "Operational runbook or procedures"
+
+          api_docs_url:
+            type: string
+            required: false
+            nullable: true
+            description: "API documentation URL"
+
+      # Technology Stack
+      technology:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          primary_language:
+            type: string
+            required: false
+            nullable: true
+            description: "Primary programming language"
+            examples: ["Python", "JavaScript", "Go", "Java", "Rust"]
+
+          framework:
+            type: string
+            required: false
+            nullable: true
+            description: "Application framework"
+            examples: ["FastAPI", "React", "Django", "Spring Boot", "Express"]
+
+          database:
+            type: string
+            required: false
+            nullable: true
+            description: "Database technology used"
+            examples: ["PostgreSQL", "MySQL", "MongoDB", "Redis"]
+
+          cache:
+            type: string
+            required: false
+            nullable: true
+            description: "Caching technology"
+            examples: ["Redis", "Memcached"]
+
+          message_queue:
+            type: string
+            required: false
+            nullable: true
+            description: "Message queue technology"
+            examples: ["RabbitMQ", "Kafka", "NATS"]
+
+      # Features/Capabilities
+      features:
+        type: array
+        required: false
+        nullable: true
+        description: "List of key features or capabilities"
+        items:
+          type: string
+        examples: [["file-sharing", "calendar", "contacts"], ["monitoring", "alerting", "dashboards"]]
+
+      # Notes
+      notes:
+        type: string
+        required: false
+        nullable: true
+        description: "Free-form operational notes"

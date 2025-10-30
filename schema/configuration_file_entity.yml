@@ -1,0 +1,173 @@
+# Configuration File Entity Schema
+# Defines the structure for configuration_file documents in rag_data.json
+
+entity_type: configuration_file
+description: Configuration file entity for services, containers, and systems
+
+# Root level fields
+root:
+  id:
+    type: string
+    required: true
+    pattern: "^config_[a-zA-Z0-9_.-]+_[a-zA-Z0-9_.-]+_[a-f0-9]{8}$"
+    description: "Unique identifier in format: config_{hostname}_{filename}_{hash}"
+    example: "config_unraid-server_grafana-ini_285ed630"
+
+  type:
+    type: string
+    required: true
+    enum: [configuration_file]
+    description: "Entity type discriminator"
+
+# Tier 1: Vector Search Content
+tier1:
+  title:
+    type: string
+    required: true
+    description: "Human-readable title"
+    example: "Grafana Configuration - grafana.ini"
+
+  content:
+    type: string
+    required: true
+    min_length: 30
+    description: "Rich description for vector matching (NO file content - just description)"
+    example: "Grafana server configuration file with database connection, authentication, SMTP settings, and logging. Located at /mnt/user/appdata/Grafana/grafana.ini on unraid-server. Configures Grafana monitoring dashboard."
+
+# Tier 2: Summary Metadata
+tier2:
+  metadata:
+    type: object
+    required: true
+    fields:
+      # Identity
+      hostname:
+        type: string
+        required: true
+        description: "Host where file is located"
+
+      config_name:
+        type: string
+        required: true
+        description: "Configuration file name"
+        example: "grafana.ini"
+
+      config_type:
+        type: string
+        required: true
+        description: "Configuration category"
+        examples: ["monitoring", "proxy", "automation", "alerting", "dashboard", "version_control", "application"]
+
+      # File Information
+      file_path:
+        type: string
+        required: true
+        description: "Relative path from service directory"
+        example: "Grafana/grafana.ini"
+
+      file_size:
+        type: integer
+        required: true
+        description: "File size in bytes"
+
+      file_format:
+        type: string
+        required: true
+        enum: ["ini", "yaml", "json", "conf", "env", "txt", "xml", "toml", "properties"]
+        description: "File format/extension"
+
+      # Usage (quick reference - relationships are authoritative)
+      service_name:
+        type: string
+        required: false
+        nullable: true
+        description: "Which service uses this config"
+
+      container_name:
+        type: string
+        required: false
+        nullable: true
+        description: "Which container uses this config"
+
+      configures_type:
+        type: string
+        required: false
+        nullable: true
+        enum: ["container", "service", "physical_server", "virtual_server"]
+        description: "What type of entity this configures"
+
+      # File Retrieval
+      file_storage_path:
+        type: string
+        required: true
+        description: "Path where file is stored in rag_output"
+        example: "configuration_files/unraid-server/grafana-ini_285ed630.ini"
+
+      checksum_sha256:
+        type: string
+        required: true
+        pattern: "^[a-f0-9]{64}$"
+        description: "SHA256 hash for integrity verification"
+
+      # Timestamps
+      file_last_modified:
+        type: string
+        required: false
+        nullable: true
+        format: iso8601
+        description: "When file was last modified on source system"
+
+      collected_at:
+        type: string
+        required: true
+        format: iso8601
+        description: "When file was collected"
+
+      last_updated:
+        type: string
+        required: true
+        format: iso8601
+        description: "When entity was last updated"
+
+# Tier 3: Detailed Information
+tier3:
+  details:
+    type: object
+    required: true
+    fields:
+      # File Details
+      file_info:
+        type: object
+        required: true
+        fields:
+          full_path:
+            type: string
+            required: true
+            description: "Full path on source system"
+            example: "/mnt/user/appdata/Grafana/grafana.ini"
+
+          size_bytes:
+            type: integer
+            required: true
+            description: "File size in bytes"
+
+          format:
+            type: string
+            required: true
+            description: "File format"
+
+      # Storage Information
+      storage:
+        type: object
+        required: true
+        fields:
+          stored_on_host:
+            type: string
+            required: true
+            description: "Hostname where file is stored"
+
+          stored_on_type:
+            type: string
+            required: true
+            enum: ["physical_server", "virtual_server", "container"]
+            description: "Type of host storing the file"

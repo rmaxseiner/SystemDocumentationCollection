@@ -13,12 +13,13 @@ from src.processors import ContainerProcessor
 from src.processors.manual_docs_processor import ManualDocsProcessor
 from src.processors.configuration_processor import ConfigurationProcessor
 from src.processors.main_processor import MainProcessor
+from src.processors.relationship_post_processor import RelationshipPostProcessor
 from src.processors.sub_processors import (
     DockerSubProcessor,
     HardwareSubProcessor,
     DockerComposeSubProcessor,
-    ProxmoxSubProcessor,
-    PhysicalStorageSubProcessor
+    ProxmoxSubProcessor
+    # PhysicalStorageSubProcessor removed - storage is now part of physical_server details
 )
 from src.utils.service_grouper import ServiceGrouper
 
@@ -28,7 +29,8 @@ sys.path.insert(0, str(Path(__file__).parent / 'src'))
 from src.utils.logging_config import setup_logging, get_logger
 from src.config.settings import initialize_config
 from src.collectors.main_collector import MainCollector
-from src.utils.chroma_utils import create_chromadb_from_rag_data
+# Chromadb will be handled by Infrastructure MCP project
+# from src.utils.chroma_utils import create_chromadb_from_rag_data
 
 
 class InfrastructurePipeline:
@@ -145,7 +147,7 @@ class InfrastructurePipeline:
         self.logger.info(f"Collection phase completed: {successful}/{total} successful")
         return successful > 0
 
-    def run_processing_phase(self):
+    def run_processing_phase(self, run_validation=False):
         """Run the data processing phase"""
         print("\n🔍 Starting Infrastructure Data Processing Phase")
         print("=" * 80)
@@ -165,7 +167,14 @@ class InfrastructurePipeline:
 
             print(f"✅ Loaded data for {len(self.collection_results)} systems")
 
-        return self._run_rag_processing()
+        processing_success = self._run_rag_processing()
+
+        # Run validation if requested and processing succeeded
+        if run_validation and processing_success:
+            validation_success = self.run_schema_validation()
+            return processing_success and validation_success
+
+        return processing_success
 
 
     def _run_rag_processing(self):
@@ -174,7 +183,10 @@ class InfrastructurePipeline:
 
         success_results = []
 
-        # Run Container Processor
+        # DISABLED - Container Processor (containers now handled by docker_sub_processor in unified processing)
+        # The legacy ContainerProcessor is replaced by docker_sub_processor which generates
+        # container entities with the new 3-tier schema structure
+        """
         if self.config.rag_processing.container_processor['enabled']:
             print("\n📦 Processing Containers...")
             container_config = self.config.rag_processing.container_processor
@@ -200,6 +212,7 @@ class InfrastructurePipeline:
                     print(f"❌ Container processing failed: {result.error}")
             except Exception as e:
                 print(f"❌ Container processing failed: {str(e)}")
+        """
 
         # Run Main Unified Processor
         main_processor_enabled = getattr(self.config.rag_processing, 'main_processor', {}).get('enabled', True)
@@ -224,9 +237,7 @@ class InfrastructurePipeline:
             main_processor.register_sub_processor_class('hardware_allocation', HardwareSubProcessor)  # Same processor handles both
             main_processor.register_sub_processor_class('docker_compose', DockerComposeSubProcessor)
             main_processor.register_sub_processor_class('proxmox', ProxmoxSubProcessor)
-            # Register PhysicalStorageSubProcessor to also process hardware section for storage devices
-            # This will be called AFTER HardwareSubProcessor for the same section, extracting storage info
-            main_processor.register_sub_processor_class('hardware', PhysicalStorageSubProcessor, append=True)
+            # PhysicalStorageSubProcessor removed - storage is now part of physical_server details
 
             try:
                 result = main_processor.process(self.collection_results)
@@ -251,8 +262,9 @@ class InfrastructurePipeline:
 
                             if containers:
                                 # Group containers into services
-                                updated_containers, services = grouper.group_containers_into_services(containers)
+                                updated_containers, services, service_relationships = grouper.group_containers_into_services(containers)
                                 print(f"✅ Service grouping completed: {len(services)} services created")
+                                print(f"✅ Generated {len(service_relationships)} service relationships")
 
                                 # Replace old container documents with updated ones (with service_id)
                                 # Remove old container documents
@@ -261,8 +273,14 @@ class InfrastructurePipeline:
                                 # Add updated containers and services
                                 rag_data['documents'] = non_container_docs + updated_containers + services
 
+                                # Add service relationships to existing relationships
+                                if 'relationships' not in rag_data:
+                                    rag_data['relationships'] = []
+                                rag_data['relationships'].extend(service_relationships)
+
                                 # Update metadata
                                 rag_data['metadata']['total_services'] = len(services)
+                                rag_data['metadata']['total_relationships'] = len(rag_data.get('relationships', []))
                                 rag_data['metadata']['total_documents'] = len(rag_data['documents'])
 
                                 # Save updated rag_data
@@ -320,8 +338,8 @@ class InfrastructurePipeline:
                 }
             )
             try:
-                # Configuration processor doesn't need collection_results
-                result = configuration_processor.process()
+                # Pass collection_results for docker-compose relationship creation
+                result = configuration_processor.process(self.collection_results)
                 if result.success:
                     print(f"✅ Configuration processing successful")
                     print(f"⚙️ Services processed: {result.data.get('services_processed', 0)}")
@@ -332,12 +350,35 @@ class InfrastructurePipeline:
             except Exception as e:
                 print(f"❌ Configuration processing failed: {str(e)}")
 
+        # Run Relationship Post-Processor
+        relationship_processor_enabled = getattr(self.config.rag_processing, 'relationship_post_processor', {}).get('enabled', True)
+        if relationship_processor_enabled:
+            print("\n🔗 Building Inferred Relationships...")
+            rag_data_path = Path(self.config.rag_processing.output_directory) / 'rag_data.json'
+
+            if rag_data_path.exists():
+                relationship_processor = RelationshipPostProcessor(rag_data_path)
+                try:
+                    if relationship_processor.process():
+                        print(f"✅ Relationship post-processing successful")
+                        print(f"🔗 DNS → Proxy matched: {relationship_processor.stats['dns_proxy_matched']}")
+                        print(f"🔗 Proxy → Service matched: {relationship_processor.stats['proxy_service_matched']}")
+                        success_results.append('relationships')
+                    else:
+                        print(f"❌ Relationship post-processing failed")
+                except Exception as e:
+                    print(f"❌ Relationship post-processing failed: {str(e)}")
+                    self.logger.error(f"Relationship post-processing failed: {str(e)}")
+            else:
+                print("⚠️  rag_data.json not found, skipping relationship post-processing")
+
         # Summary
         print(f"\n🎯 RAG Processing Summary:")
         print(f"   📦 Container processing: {'✅' if 'containers' in success_results else '❌'}")
         print(f"   🔄 Unified processing: {'✅' if 'unified' in success_results else '❌'}")
         print(f"   📚 Manual docs processing: {'✅' if 'manual_docs' in success_results else '❌'}")
         print(f"   ⚙️ Configuration processing: {'✅' if 'configuration' in success_results else '❌'}")
+        print(f"   🔗 Relationship post-processing: {'✅' if 'relationships' in success_results else '❌'}")
 
         # Create ChromaDB if processing was successful
         chromadb_success = False
@@ -354,6 +395,14 @@ class InfrastructurePipeline:
 
     def _create_chromadb(self):
         """Create ChromaDB vector database from RAG data"""
+        print("\n🔍 Skipping ChromaDB creation (handled by Infrastructure MCP)")
+
+        # ChromaDB will be created by the Infrastructure MCP project
+        # This pipeline only generates rag_data.json
+        return True
+
+        # COMMENTED OUT - ChromaDB creation moved to Infrastructure MCP
+        """
         print("\n🔍 Creating ChromaDB Vector Database...")
 
         # Path to rag_data.json
@@ -400,9 +449,10 @@ class InfrastructurePipeline:
             print(f"❌ ChromaDB creation failed: {str(e)}")
             self.logger.error(f"ChromaDB creation failed: {str(e)}")
             return False
+        """
 
-    def run_full_pipeline(self, collect_services_only=False, collect_system_only=False):
-        """Run the complete pipeline: collection -> processing"""
+    def run_full_pipeline(self, collect_services_only=False, collect_system_only=False, run_validation=False):
+        """Run the complete pipeline: collection -> processing -> validation (optional)"""
         print("🏭 Starting Full Infrastructure Pipeline")
         print("=" * 100)
 
@@ -419,13 +469,20 @@ class InfrastructurePipeline:
         # Phase 2: Processing
         processing_success = self.run_processing_phase()
 
+        # Phase 3: Validation (optional)
+        validation_success = True
+        if run_validation and processing_success:
+            validation_success = self.run_schema_validation()
+
         # Final summary
         print("\\n" + "=" * 100)
         print("🎯 Pipeline Summary")
         print(f"   📡 Collection: {'✅ Success' if collection_success else '❌ Failed'}")
         print(f"   🔍 Processing: {'✅ Success' if processing_success else '❌ Failed'}")
-        
-        if collection_success and processing_success:
+        if run_validation:
+            print(f"   ✓  Validation: {'✅ Success' if validation_success else '❌ Failed'}")
+
+        if collection_success and processing_success and validation_success:
             print("\\n🎉 Full pipeline completed successfully!")
             print("\\n📚 Next steps:")
             print("   1. Review collected data in work/collected/")
@@ -506,6 +563,177 @@ class InfrastructurePipeline:
             # Memory info
             if 'memory_gb' in summary:
                 print(f"   🧠 Memory: {summary['memory_gb']} GB")
+
+    def run_schema_validation(self):
+        """Run schema and relationship validation on generated RAG data"""
+        print("\n✓  Starting Schema and Relationship Validation")
+        print("=" * 80)
+
+        self.logger.info("Starting schema validation")
+
+        # Import validation classes
+        try:
+            from tests.test_entity_schema import EntitySchemaValidator
+            from tests.test_relationships import RelationshipValidator
+        except ImportError as e:
+            print(f"❌ Failed to import validation modules: {e}")
+            self.logger.error(f"Failed to import validation modules: {e}")
+            return False
+
+        # Check if rag_data.json exists
+        rag_data_path = Path(self.config.rag_processing.output_directory) / 'rag_data.json'
+        if not rag_data_path.exists():
+            print(f"❌ rag_data.json not found at {rag_data_path}")
+            self.logger.error(f"rag_data.json not found at {rag_data_path}")
+            return False
+
+        # Find all schema files
+        schema_dir = Path(__file__).parent / 'schema'
+        if not schema_dir.exists():
+            print(f"❌ Schema directory not found at {schema_dir}")
+            self.logger.error(f"Schema directory not found at {schema_dir}")
+            return False
+
+        schema_files = list(schema_dir.glob('*_entity.yml'))
+        if not schema_files:
+            print(f"⚠️  No schema files found in {schema_dir}")
+            return True  # Not an error, just nothing to validate
+
+        print(f"\n📋 Found {len(schema_files)} entity schemas to validate")
+
+        # Validate each entity schema
+        entity_validation_results = {}
+        total_errors = 0
+        total_warnings = 0
+
+        for schema_file in sorted(schema_files):
+            entity_type = schema_file.stem.replace('_entity', '')
+            print(f"\n🔍 Validating {entity_type} entities...")
+
+            try:
+                validator = EntitySchemaValidator(schema_file)
+
+                # Load rag_data.json
+                import json
+                with open(rag_data_path, 'r') as f:
+                    rag_data = json.load(f)
+
+                # Filter documents by entity type
+                matching_docs = [
+                    (i, doc) for i, doc in enumerate(rag_data.get('documents', []))
+                    if doc.get('type') == validator.entity_type
+                ]
+
+                if not matching_docs:
+                    print(f"   ℹ️  No {entity_type} documents found - skipping")
+                    continue
+
+                print(f"   Found {len(matching_docs)} document(s) to validate")
+
+                # Validate each document
+                all_valid = True
+                for doc_index, doc in matching_docs:
+                    is_valid = validator.validate_document(doc, doc_index)
+                    if not is_valid:
+                        all_valid = False
+
+                entity_validation_results[entity_type] = {
+                    'valid': all_valid and len(validator.errors) == 0,
+                    'errors': len(validator.errors),
+                    'warnings': len(validator.warnings),
+                    'documents': len(matching_docs)
+                }
+
+                total_errors += len(validator.errors)
+                total_warnings += len(validator.warnings)
+
+                if all_valid and len(validator.errors) == 0:
+                    print(f"   ✅ All {entity_type} documents valid")
+                else:
+                    print(f"   ❌ Validation failed: {len(validator.errors)} errors, {len(validator.warnings)} warnings")
+                    # Show first few errors
+                    for error in validator.errors[:3]:
+                        print(f"      - {error}")
+                    if len(validator.errors) > 3:
+                        print(f"      ... and {len(validator.errors) - 3} more errors")
+
+            except Exception as e:
+                print(f"   ❌ Validation failed with exception: {e}")
+                self.logger.error(f"Entity validation failed for {entity_type}: {e}")
+                entity_validation_results[entity_type] = {
+                    'valid': False,
+                    'errors': 1,
+                    'warnings': 0,
+                    'documents': 0,
+                    'exception': str(e)
+                }
+                total_errors += 1
+
+        # Validate relationships
+        print(f"\n🔗 Validating relationships...")
+        relationship_valid = False
+        relationship_errors = 0
+        relationship_warnings = 0
+
+        try:
+            rel_validator = RelationshipValidator(rag_data_path)
+
+            if rel_validator.load_data():
+                rel_validator.validate_all()
+
+                relationship_errors = len(rel_validator.errors)
+                relationship_warnings = len(rel_validator.warnings)
+                relationship_valid = relationship_errors == 0
+
+                stats = rel_validator.get_statistics()
+                print(f"   Total relationships: {stats['total_relationships']}")
+                print(f"   Bidirectional pairs: {stats['bidirectional_pairs']}")
+
+                if relationship_valid:
+                    print(f"   ✅ All relationships valid")
+                else:
+                    print(f"   ❌ Validation failed: {relationship_errors} errors, {relationship_warnings} warnings")
+                    # Show first few errors
+                    for error in rel_validator.errors[:3]:
+                        print(f"      - {error}")
+                    if len(rel_validator.errors) > 3:
+                        print(f"      ... and {len(rel_validator.errors) - 3} more errors")
+
+                total_errors += relationship_errors
+                total_warnings += relationship_warnings
+            else:
+                print(f"   ❌ Failed to load relationship data")
+                total_errors += 1
+
+        except Exception as e:
+            print(f"   ❌ Relationship validation failed with exception: {e}")
+            self.logger.error(f"Relationship validation failed: {e}")
+            total_errors += 1
+
+        # Print summary
+        print("\n" + "=" * 80)
+        print("📊 Validation Summary")
+        print("=" * 80)
+
+        print("\nEntity Validation:")
+        for entity_type, result in entity_validation_results.items():
+            status = "✅" if result['valid'] else "❌"
+            print(f"  {status} {entity_type}: {result['documents']} docs, "
+                  f"{result['errors']} errors, {result['warnings']} warnings")
+
+        print(f"\nRelationship Validation:")
+        status = "✅" if relationship_valid else "❌"
+        print(f"  {status} {relationship_errors} errors, {relationship_warnings} warnings")
+
+        print(f"\n{'=' * 80}")
+        if total_errors == 0:
+            print("✅ All validations passed!")
+            self.logger.info("Schema validation completed successfully")
+            return True
+        else:
+            print(f"❌ Validation failed with {total_errors} total errors and {total_warnings} warnings")
+            self.logger.error(f"Schema validation failed with {total_errors} errors")
+            return False
 
     def run_validation(self):
         """Run configuration validation and system checks"""
@@ -668,6 +896,8 @@ def main():
                         help='Collect only service configurations')
     parser.add_argument('--system-only', action='store_true',
                         help='Collect only system data (no service configs)')
+    parser.add_argument('--validate', action='store_true',
+                        help='Run schema and relationship validation after processing')
 
     args = parser.parse_args()
 
@@ -687,11 +917,12 @@ def main():
                 collect_system_only=args.system_only
             )
         elif args.command == 'process':
-            success = pipeline.run_processing_phase()
+            success = pipeline.run_processing_phase(run_validation=args.validate)
         elif args.command == 'full-pipeline':
             success = pipeline.run_full_pipeline(
                 collect_services_only=args.services_only,
-                collect_system_only=args.system_only
+                collect_system_only=args.system_only,
+                run_validation=args.validate
             )
         elif args.command == 'status':
             # TODO: Implement status command

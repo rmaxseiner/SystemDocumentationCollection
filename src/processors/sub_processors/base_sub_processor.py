@@ -38,15 +38,17 @@ class SubProcessor(ABC):
         pass
 
     @abstractmethod
-    def process(self, section_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def process(self, section_data: Dict[str, Any]) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
-        Process section data and return RAG documents
+        Process section data and return RAG documents and relationships
 
         Args:
             section_data: The section data from unified collector
 
         Returns:
-            List of RAG documents (dicts) ready for rag_data.json
+            Tuple of (documents, relationships):
+                - documents: List of RAG documents (dicts) ready for rag_data.json
+                - relationships: List of relationship dicts defining connections between entities
         """
         pass
 

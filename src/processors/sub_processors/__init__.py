@@ -9,13 +9,12 @@ from .docker_sub_processor import DockerSubProcessor
 from .hardware_sub_processor import HardwareSubProcessor
 from .docker_compose_sub_processor import DockerComposeSubProcessor
 from .proxmox_sub_processor import ProxmoxSubProcessor
-from .physical_storage_sub_processor import PhysicalStorageSubProcessor
+# PhysicalStorageSubProcessor removed - storage is now part of physical_server details
 
 __all__ = [
     'SubProcessor',
     'DockerSubProcessor',
     'HardwareSubProcessor',
     'DockerComposeSubProcessor',
-    'ProxmoxSubProcessor',
-    'PhysicalStorageSubProcessor'
+    'ProxmoxSubProcessor'
 ]

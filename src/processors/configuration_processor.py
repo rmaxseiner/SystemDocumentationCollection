@@ -16,6 +16,7 @@ import mimetypes
 
 from .base_processor import BaseProcessor, ProcessingResult
 from .config_parsers.registry import registry
+from .config_relationship_builder import ConfigRelationshipBuilder
 
 # Maximum file size for parsing (1MB)
 MAX_PARSE_SIZE = 1024 * 1024
@@ -35,12 +36,18 @@ class ConfigurationProcessor(BaseProcessor):
         self.output_dir = Path(config.get('output_dir', 'rag_output'))
         self.config_files_dir = self.output_dir / 'configuration_files'
 
-        # Multi-service configuration handlers
-        self.multi_service_handlers = {
-            'prometheus.yml': self._process_prometheus_config,
-            'docker-compose.yml': self._process_docker_compose,
-            'docker-compose.yaml': self._process_docker_compose,
+        # Relationship builder
+        self.rel_builder = ConfigRelationshipBuilder()
+
+        # Multi-service configuration handlers (special files requiring additional processing)
+        self.special_file_handlers = {
+            'prometheus.yml': self._process_prometheus_config_special,
+            'docker-compose.yml': self._process_docker_compose_special,
+            'docker-compose.yaml': self._process_docker_compose_special,
         }
+
+        # Authentik config files (placeholder for future)
+        self.authentik_patterns = ['authentik']
 
         # Configuration type mappings
         self.config_type_mappings = {
@@ -68,12 +75,15 @@ class ConfigurationProcessor(BaseProcessor):
         Process configuration files from services directory
 
         Args:
-            collected_data: Not used for configuration processing
+            collected_data: Unified collected data (used by parsers for relationship creation)
 
         Returns:
             ProcessingResult: Contains processed configuration results
         """
         try:
+            # Store collected_data for use by parsers
+            self.collected_data = collected_data or {}
+
             self.logger.info("Starting configuration file processing")
 
             # Create output directories
@@ -95,20 +105,27 @@ class ConfigurationProcessor(BaseProcessor):
 
             # Process each service directory
             all_documents = []
+            all_relationships = []
             processed_services = 0
 
             for service_dir in service_dirs:
                 try:
-                    service_docs = self._process_service_directory(service_dir)
+                    service_docs, service_rels = self._process_service_directory(service_dir)
                     if service_docs:
                         all_documents.extend(service_docs)
+                        all_relationships.extend(service_rels)
                         processed_services += 1
                 except Exception as e:
                     self.logger.error(f"Failed to process service directory {service_dir}: {e}")
                     continue
 
-            # Update rag_data.json with configuration documents
-            rag_data_file = self._update_rag_data_json(all_documents, output_path)
+            # Process docker-compose files from collected data
+            compose_docs, compose_rels = self._process_docker_compose_from_collected_data(self.collected_data)
+            all_documents.extend(compose_docs)
+            all_relationships.extend(compose_rels)
+
+            # Update rag_data.json with configuration documents and relationships
+            rag_data_file = self._update_rag_data_json(all_documents, all_relationships, output_path)
 
             self.logger.info(f"Configuration processing completed: {len(all_documents)} documents from {processed_services} services")
 
@@ -152,11 +169,16 @@ class ConfigurationProcessor(BaseProcessor):
         self.logger.debug(f"Discovered {len(service_dirs)} service directories")
         return service_dirs
 
-    def _process_service_directory(self, service_dir: Path) -> List[Dict[str, Any]]:
-        """Process a single service directory containing configuration files"""
+    def _process_service_directory(self, service_dir: Path) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Process a single service directory containing configuration files
+
+        Returns:
+            Tuple of (documents, relationships)
+        """
         self.logger.debug(f"Processing service directory: {service_dir}")
 
         documents = []
+        relationships = []
         service_name = service_dir.name
 
         # Process each subdirectory (container/service instance)
@@ -199,7 +221,7 @@ class ConfigurationProcessor(BaseProcessor):
                 if config_file.name == 'collection_metadata.yml':
                     continue
 
-                doc = self._process_config_file(
+                doc, rels = self._process_config_file(
                     config_file,
                     service_name,
                     container_name,
@@ -208,12 +230,251 @@ class ConfigurationProcessor(BaseProcessor):
                     collection_metadata
                 )
                 if doc:
-                    if isinstance(doc, list):
-                        documents.extend(doc)
-                    else:
-                        documents.append(doc)
+                    documents.append(doc)
+                if rels:
+                    relationships.extend(rels)
 
-        return documents
+        return documents, relationships
+
+    def _process_docker_compose_from_collected_data(
+        self, collected_data: Dict[str, Any]
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        Process docker-compose files from collected unified JSON files.
+
+        This reads unified JSON files from work/collected/ and processes
+        docker-compose.yml files from the docker_compose section.
+
+        Args:
+            collected_data: Not used - reads from files directly
+
+        Returns:
+            Tuple of (documents, relationships)
+        """
+        documents = []
+        relationships = []
+
+        # Determine collected data directory
+        collected_dir = Path('work/collected')
+        if not collected_dir.exists():
+            self.logger.warning(f"Collected data directory not found: {collected_dir}")
+            return documents, relationships
+
+        self.logger.info("Processing docker-compose files from collected data")
+
+        # Get the parser for docker-compose
+        parser = registry.get_parser('docker-compose', 'docker_compose')
+        if not parser:
+            self.logger.warning("No docker-compose parser available")
+            return documents, relationships
+
+        # Find all unified JSON files
+        unified_files = list(collected_dir.glob('*_unified.json'))
+        if not unified_files:
+            self.logger.info("No unified JSON files found")
+            return documents, relationships
+
+        self.logger.info(f"Found {len(unified_files)} unified JSON files to check for docker-compose")
+
+        # Process each unified JSON file
+        for unified_file in unified_files:
+            try:
+                with open(unified_file, 'r') as f:
+                    unified_data = json.load(f)
+
+                # Extract system name from filename (remove _unified.json)
+                system_name = unified_file.stem.replace('_unified', '')
+
+                # Get the data section
+                if not unified_data.get('success'):
+                    self.logger.debug(f"Skipping unsuccessful collection: {system_name}")
+                    continue
+
+                system_data = unified_data.get('data', {})
+                if not system_data:
+                    continue
+
+                # Check if this system has docker_compose data
+                sections = system_data.get('sections', {})
+                docker_compose_section = sections.get('docker_compose', {})
+                compose_files = docker_compose_section.get('compose_files', [])
+
+                if not compose_files:
+                    self.logger.debug(f"No docker-compose files for system {system_name}")
+                    continue
+
+                self.logger.info(f"Processing {len(compose_files)} docker-compose files from {system_name}")
+
+                for compose_file_data in compose_files:
+                    try:
+                        doc, rels = self._process_docker_compose_file(
+                            compose_file_data, system_name, system_data, parser
+                        )
+                        if doc:
+                            documents.append(doc)
+                        if rels:
+                            relationships.extend(rels)
+
+                    except Exception as e:
+                        self.logger.error(
+                            f"Failed to process docker-compose file from {system_name}: {e}"
+                        )
+                        continue
+
+            except Exception as e:
+                self.logger.error(f"Failed to read unified file {unified_file}: {e}")
+                continue
+
+        self.logger.info(
+            f"Completed docker-compose processing: {len(documents)} documents, "
+            f"{len(relationships)} relationships"
+        )
+
+        return documents, relationships
+
+    def _process_docker_compose_file(
+        self,
+        compose_file_data: Dict[str, Any],
+        hostname: str,
+        system_data: Dict[str, Any],
+        parser
+    ) -> tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        Process a single docker-compose file from collected data.
+
+        Args:
+            compose_file_data: Compose file data from unified JSON
+            hostname: Hostname where compose file is located
+            system_data: Full system data for relationship matching
+            parser: DockerComposeParser instance
+
+        Returns:
+            Tuple of (document, relationships)
+        """
+        # Extract compose file info
+        file_path = compose_file_data.get('path', '')
+        content = compose_file_data.get('content', '')
+        filename = compose_file_data.get('filename', 'docker-compose.yml')
+        file_size = compose_file_data.get('file_size', 0)
+        directory = compose_file_data.get('directory', '')
+        last_modified_timestamp = compose_file_data.get('last_modified_timestamp')
+
+        if not content or content == "REDACTED":
+            self.logger.warning(f"No content for docker-compose file at {file_path}")
+            return None, []
+
+        # Parse the compose file
+        parsed_config = parser.parse(content, file_path)
+        if not parsed_config:
+            self.logger.warning(f"Failed to parse docker-compose file {file_path}")
+            return None, []
+
+        # Generate document ID
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
+        sanitized_name = Path(directory).name.replace('.', '-').replace('/', '-')
+        doc_id = f"config_{hostname}_compose-{sanitized_name}_{content_hash[:8]}"
+
+        # Build content description
+        service_count = parsed_config.get('service_count', 0)
+        service_names = parsed_config.get('service_names', [])
+        content_description = (
+            f"Docker Compose configuration file at {directory}. "
+            f"Defines {service_count} services: {', '.join(service_names[:5])}. "
+            f"Located at {file_path} on {hostname}."
+        )
+
+        # Add search terms
+        search_terms = parser.extract_search_terms(parsed_config)
+        if search_terms:
+            content_description += " " + " ".join(search_terms)
+
+        # Build document with 3-tier structure
+        document = {
+            # Root
+            "id": doc_id,
+            "type": "configuration_file",
+
+            # Tier 1: Vector Search Content
+            "title": f"Docker Compose Configuration - {Path(directory).name}",
+            "content": content_description,
+
+            # Tier 2: Summary Metadata
+            "metadata": {
+                # Identity
+                "hostname": hostname,
+                "config_name": filename,
+                "config_type": "docker_compose",
+
+                # File Information
+                "file_path": file_path,
+                "file_size": file_size,
+                "file_format": "yaml",
+
+                # Usage
+                "service_name": "docker-compose",
+                "container_name": Path(directory).name,
+                "configures_type": "container",
+
+                # File Retrieval (not stored separately, embedded in collected data)
+                "file_storage_path": file_path,
+                "checksum_sha256": content_hash,
+
+                # Parsed configuration
+                "parsed_config": parsed_config,
+
+                # Timestamps
+                "file_last_modified": (
+                    datetime.fromtimestamp(last_modified_timestamp).isoformat()
+                    if last_modified_timestamp else None
+                ),
+                "collected_at": system_data.get('collection_timestamp', datetime.now().isoformat()),
+                "last_updated": datetime.now().isoformat()
+            },
+
+            # Tier 3: Detailed Information
+            "details": {
+                "file_info": {
+                    "full_path": file_path,
+                    "size_bytes": file_size,
+                    "format": "yaml"
+                },
+                "storage": {
+                    "stored_on_host": hostname,
+                    "stored_on_type": "virtual_server"
+                }
+            }
+        }
+
+        # Create relationships
+        all_relationships = []
+
+        # Storage relationships (STORED_ON / STORES)
+        storage_rels = self.rel_builder.create_storage_relationships(
+            config_id=doc_id,
+            host=hostname,
+            file_path=file_path
+        )
+        all_relationships.extend(storage_rels)
+
+        # Configuration relationships (CONFIGURES / CONFIGURED_BY)
+        # Let parser create relationships to containers
+        try:
+            parser_rels = parser.create_relationships(
+                config_id=doc_id,
+                parsed_config=parsed_config,
+                hostname=hostname,
+                collected_data=system_data
+            )
+            all_relationships.extend(parser_rels)
+            self.logger.info(
+                f"Created {len(parser_rels)} relationships for docker-compose at {file_path}"
+            )
+        except Exception as e:
+            self.logger.error(
+                f"Failed to create relationships for docker-compose {file_path}: {e}"
+            )
+
+        return document, all_relationships
 
     def _get_config_files(self, container_dir: Path) -> List[Path]:
         """Get all configuration files from container directory"""
@@ -231,28 +492,35 @@ class ConfigurationProcessor(BaseProcessor):
         return config_files
 
     def _process_config_file(self, config_file: Path, service_name: str, container_name: str,
-                           host: str, service_type: str, collection_metadata: Dict) -> Optional[Any]:
-        """Process a single configuration file"""
+                           host: str, service_type: str, collection_metadata: Dict) -> tuple[Optional[Dict], List[Dict]]:
+        """Process a single configuration file
+
+        Returns:
+            Tuple of (document, relationships)
+        """
         self.logger.debug(f"Processing config file: {config_file}")
 
         try:
             # Copy file to output directory
             target_path = self._copy_config_file(config_file, host, container_name)
 
-            # Check if this is a multi-service configuration file
-            if config_file.name in self.multi_service_handlers:
-                return self.multi_service_handlers[config_file.name](
-                    config_file, target_path, service_name, container_name, host, service_type, collection_metadata
+            # Create base document
+            document, relationships = self._create_config_file_document(
+                config_file, target_path, service_name, container_name, host, service_type, collection_metadata
+            )
+
+            # Check if this is a special file requiring additional relationship processing
+            if config_file.name in self.special_file_handlers:
+                additional_rels = self.special_file_handlers[config_file.name](
+                    config_file, document, host, container_name
                 )
-            else:
-                # Single service configuration
-                return self._create_single_service_document(
-                    config_file, target_path, service_name, container_name, host, service_type, collection_metadata
-                )
+                relationships.extend(additional_rels)
+
+            return document, relationships
 
         except Exception as e:
             self.logger.error(f"Failed to process config file {config_file}: {e}")
-            return None
+            return None, []
 
     def _copy_config_file(self, source_file: Path, host: str, container_name: str) -> Path:
         """Copy configuration file to output directory structure"""
@@ -265,58 +533,283 @@ class ConfigurationProcessor(BaseProcessor):
 
         return target_path
 
-    def _create_single_service_document(self, source_file: Path, target_path: Path,
+    def _create_config_file_document(self, source_file: Path, target_path: Path,
                                       service_name: str, container_name: str, host: str,
-                                      service_type: str, collection_metadata: Dict) -> Dict[str, Any]:
-        """Create document for single-service configuration file"""
+                                      service_type: str, collection_metadata: Dict) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        """Create configuration_file entity document with 3-tier schema
+
+        Returns:
+            Tuple of (document, relationships)
+        """
 
         # Generate unique document ID
         content_hash = self._generate_file_hash(source_file)
-        doc_id = f"config_{host}_{container_name}_{source_file.stem}_{content_hash[:8]}"
+        sanitized_name = source_file.stem.replace('.', '-')
+        doc_id = f"config_{host}_{sanitized_name}_{content_hash[:8]}"
 
         # Determine configuration type
         config_type = self.config_type_mappings.get(service_type, 'application')
 
         # Get file metadata
         file_stats = source_file.stat()
+        file_size = file_stats.st_size
 
-        # Create relative path for metadata
+        # Create relative path for storage
         relative_path = target_path.relative_to(self.config_files_dir)
 
+        # Determine file format
+        file_format = source_file.suffix.lstrip('.').lower() or 'txt'
+        if file_format not in ['ini', 'yaml', 'json', 'conf', 'env', 'txt', 'xml', 'toml', 'properties']:
+            file_format = 'txt'
+
+        # Build content for vector search (description, NOT file content)
+        full_path = str(source_file)
+        content = self._build_config_content_description(
+            source_file.name, config_type, service_type, container_name, host, full_path
+        )
+
+        # Build document with 3-tier structure
         document = {
+            # Root
             "id": doc_id,
             "type": "configuration_file",
-            "title": f"Configuration - {container_name}/{source_file.name}",
-            "content": source_file.name,
+
+            # Tier 1: Vector Search Content
+            "title": f"{service_type.title()} Configuration - {source_file.name}",
+            "content": content,
+
+            # Tier 2: Summary Metadata
             "metadata": {
-                "host": host,
-                "service": container_name,
-                "service_type": service_type,
+                # Identity
+                "hostname": host,
+                "config_name": source_file.name,
                 "config_type": config_type,
+
+                # File Information
                 "file_path": str(relative_path),
-                "file_size": file_stats.st_size,
-                "last_modified": datetime.fromtimestamp(file_stats.st_mtime).isoformat(),
-                "multi_service": False,
-                "parent_config": None,
-                "extracted_from": None,
-                "collection_metadata": collection_metadata,
-                "parsed_config": None,
-                "processed_at": datetime.now().isoformat()
+                "file_size": file_size,
+                "file_format": file_format,
+
+                # Usage (relationships are authoritative)
+                "service_name": service_type,
+                "container_name": container_name,
+                "configures_type": "container",  # Default, may be updated
+
+                # File Retrieval
+                "file_storage_path": str(relative_path),
+                "checksum_sha256": content_hash,
+
+                # Timestamps
+                "file_last_modified": datetime.fromtimestamp(file_stats.st_mtime).isoformat(),
+                "collected_at": collection_metadata.get('collection_timestamp', datetime.now().isoformat()),
+                "last_updated": datetime.now().isoformat()
             },
-            "tags": [
-                "configuration",
-                service_type,
-                config_type,
-                host,
-                container_name,
-                source_file.suffix.lstrip('.') if source_file.suffix else 'config'
-            ]
+
+            # Tier 3: Detailed Information
+            "details": {
+                "file_info": {
+                    "full_path": full_path,
+                    "size_bytes": file_size,
+                    "format": file_format
+                },
+                "storage": {
+                    "stored_on_host": host,
+                    "stored_on_type": "virtual_server"  # Default assumption
+                }
+            }
         }
 
-        # Try to parse configuration file for structured data
-        self._parse_and_enhance_document(document, source_file, service_type, config_type)
+        # Try to parse configuration file if parser available
+        parsed_config = None
+        parser = registry.get_parser(service_type, config_type)
 
-        return document
+        # Special handling for docker-compose files
+        is_docker_compose = source_file.name in ['docker-compose.yml', 'docker-compose.yaml']
+        if is_docker_compose:
+            # Override config_type and get docker-compose parser
+            config_type = 'docker_compose'
+            document["metadata"]["config_type"] = config_type
+            parser = registry.get_parser('docker-compose', 'docker_compose')
+
+        if parser:
+            try:
+                # Read and parse file content
+                with open(source_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    file_content = f.read()
+
+                parsed_config = parser.parse(file_content, str(source_file))
+                if parsed_config:
+                    # Check if parser can create full entities (e.g., NPM proxy_host entities)
+                    if hasattr(parser, 'create_proxy_host_entity'):
+                        try:
+                            proxy_host_entity = parser.create_proxy_host_entity(
+                                parsed_config,
+                                str(source_file)
+                            )
+                            if proxy_host_entity:
+                                # Replace configuration_file document with proxy_host entity
+                                document = proxy_host_entity
+                                self.logger.info(
+                                    f"Created proxy_host entity for {source_file.name}"
+                                )
+                        except Exception as e:
+                            self.logger.warning(
+                                f"Failed to create proxy_host entity for {source_file.name}: {e}, "
+                                f"falling back to configuration_file"
+                            )
+
+                    # If still a configuration_file (not replaced by entity), add parsed data
+                    if document["type"] == "configuration_file":
+                        # Add parsed data to metadata
+                        document["metadata"]["parsed_config"] = parsed_config
+
+                        # Extract and add search terms
+                        search_terms = parser.extract_search_terms(parsed_config)
+                        if search_terms:
+                            # Add search terms to content for better vector search
+                            document["content"] += " " + " ".join(search_terms)
+
+                        self.logger.debug(
+                            f"Successfully parsed {source_file.name} using {parser.__class__.__name__}"
+                        )
+                else:
+                    self.logger.debug(f"Parser returned no data for {source_file.name}")
+
+            except Exception as e:
+                self.logger.warning(f"Failed to parse config file {source_file.name}: {e}")
+
+        # Create relationships
+        relationships = []
+
+        # Storage relationships (STORED_ON / STORES)
+        storage_rels = self.rel_builder.create_storage_relationships(
+            config_id=doc_id,
+            host=host,
+            file_path=full_path
+        )
+        relationships.extend(storage_rels)
+
+        # Configuration relationships (CONFIGURES / CONFIGURED_BY)
+        # For docker-compose files, let the parser create relationships to multiple containers
+        # For other files, create default relationship to the service's container
+        if is_docker_compose and parser and parsed_config:
+            # Use parser to create relationships to all containers defined in compose file
+            try:
+                parser_rels = parser.create_relationships(
+                    config_id=doc_id,
+                    parsed_config=parsed_config,
+                    hostname=host,
+                    collected_data=self.collected_data
+                )
+                relationships.extend(parser_rels)
+                self.logger.info(
+                    f"Created {len(parser_rels)} docker-compose relationships for {source_file.name}"
+                )
+            except Exception as e:
+                self.logger.error(f"Failed to create parser relationships for {source_file.name}: {e}")
+        else:
+            # Default: create relationship to the service's container
+            container_id = f"container_{host}_{container_name}"
+            config_rels = self.rel_builder.create_configuration_relationships(
+                config_id=doc_id,
+                target_id=container_id,
+                target_type='container',
+                config_type=config_type if not is_docker_compose else 'application_settings',
+                required=True
+            )
+            relationships.extend(config_rels)
+
+        return document, relationships
+
+    def _build_config_content_description(self, filename: str, config_type: str,
+                                         service_type: str, container_name: str,
+                                         host: str, file_path: str) -> str:
+        """Build rich content description for vector search (NO file content)"""
+
+        # Build description
+        parts = [
+            f"{service_type.title()} configuration file '{filename}'.",
+            f"Type: {config_type}.",
+            f"Configures {container_name} container on {host}.",
+            f"Located at {file_path}."
+        ]
+
+        return ' '.join(parts)
+
+    # ====================
+    # Special File Handlers (Placeholders)
+    # ====================
+
+    def _process_docker_compose_special(self, config_file: Path, document: Dict,
+                                       host: str, container_name: str) -> List[Dict[str, Any]]:
+        """
+        Process docker-compose file to create relationships to all containers it defines.
+
+        TODO: Parse docker-compose.yml to extract service names
+        TODO: Create CONFIGURES relationship for each container
+
+        For now, returns empty list (placeholder).
+
+        Args:
+            config_file: Path to docker-compose file
+            document: Base config document
+            host: Host where compose file runs
+            container_name: Container name (service directory name)
+
+        Returns:
+            List of additional relationships
+        """
+        self.logger.info(f"TODO: Process docker-compose file {config_file.name} for container relationships")
+        # Placeholder - will be implemented to parse compose file and create
+        # one CONFIGURES relationship per container service
+        return []
+
+    def _process_prometheus_config_special(self, config_file: Path, document: Dict,
+                                          host: str, container_name: str) -> List[Dict[str, Any]]:
+        """
+        Process prometheus.yml to create MONITORS relationships.
+
+        TODO: Parse prometheus.yml to extract scrape targets
+        TODO: Create MONITORS relationship for each target
+
+        For now, returns empty list (placeholder).
+
+        Args:
+            config_file: Path to prometheus.yml
+            document: Base config document
+            host: Host where prometheus runs
+            container_name: Container name
+
+        Returns:
+            List of additional relationships
+        """
+        self.logger.info(f"TODO: Process prometheus config {config_file.name} for monitoring relationships")
+        # Placeholder - will be implemented to parse prometheus config and create
+        # MONITORS relationships to each scraped target
+        return []
+
+    def _process_authentik_config_special(self, config_file: Path, document: Dict,
+                                         host: str, container_name: str) -> List[Dict[str, Any]]:
+        """
+        Process Authentik configuration files.
+
+        TODO: Parse Authentik config to extract authentication/authorization settings
+        TODO: Create appropriate relationships (AUTHENTICATES, AUTHORIZES, etc.)
+
+        For now, returns empty list (placeholder).
+
+        Args:
+            config_file: Path to authentik config
+            document: Base config document
+            host: Host where authentik runs
+            container_name: Container name
+
+        Returns:
+            List of additional relationships
+        """
+        self.logger.info(f"TODO: Process authentik config {config_file.name} for auth relationships")
+        # Placeholder - will be implemented when Authentik relationship types are defined
+        return []
 
     def _parse_and_enhance_document(self, document: Dict[str, Any], source_file: Path,
                                     service_type: str, config_type: str) -> None:
@@ -439,17 +932,7 @@ class ConfigurationProcessor(BaseProcessor):
                         "job_name": job_name,
                         "targets": scrape_config.get('static_configs', [{}])[0].get('targets', []),
                         "processed_at": datetime.now().isoformat()
-                    },
-                    "tags": [
-                        "configuration",
-                        "configuration_decomposed",
-                        "prometheus",
-                        "monitoring",
-                        "scrape_job",
-                        job_name,
-                        host,
-                        container_name
-                    ]
+                    }
                 }
 
                 documents.append(job_document)
@@ -519,17 +1002,7 @@ class ConfigurationProcessor(BaseProcessor):
                         "ports": service_config.get('ports', []),
                         "volumes": service_config.get('volumes', []),
                         "processed_at": datetime.now().isoformat()
-                    },
-                    "tags": [
-                        "configuration",
-                        "configuration_decomposed",
-                        "docker",
-                        "container",
-                        "service",
-                        service_name_key,
-                        host,
-                        container_name
-                    ]
+                    }
                 }
 
                 documents.append(service_document)
@@ -540,19 +1013,19 @@ class ConfigurationProcessor(BaseProcessor):
         return documents
 
     def _generate_file_hash(self, file_path: Path) -> str:
-        """Generate MD5 hash of file content for unique identification"""
-        hash_md5 = hashlib.md5()
+        """Generate SHA256 hash of file content for unique identification"""
+        hash_sha256 = hashlib.sha256()
         try:
             with open(file_path, "rb") as f:
                 for chunk in iter(lambda: f.read(4096), b""):
-                    hash_md5.update(chunk)
-            return hash_md5.hexdigest()
+                    hash_sha256.update(chunk)
+            return hash_sha256.hexdigest()
         except Exception as e:
             self.logger.warning(f"Failed to hash file {file_path}: {e}")
-            return hashlib.md5(str(file_path).encode()).hexdigest()
+            return hashlib.sha256(str(file_path).encode()).hexdigest()
 
-    def _update_rag_data_json(self, documents: List[Dict[str, Any]], output_path: Path) -> Path:
-        """Update rag_data.json with configuration file documents"""
+    def _update_rag_data_json(self, documents: List[Dict[str, Any]], relationships: List[Dict[str, Any]], output_path: Path) -> Path:
+        """Update rag_data.json with configuration file documents and relationships"""
         rag_data_file = output_path / 'rag_data.json'
 
         # Load existing rag_data.json or create new structure
@@ -568,11 +1041,11 @@ class ConfigurationProcessor(BaseProcessor):
             self.logger.info("Creating new rag_data.json")
             rag_data = self._create_empty_rag_data()
 
-        # Remove existing configuration documents (both types)
+        # Remove existing configuration documents (only configuration_file type now)
         original_doc_count = len(rag_data.get('documents', []))
         rag_data['documents'] = [
             doc for doc in rag_data.get('documents', [])
-            if doc.get('type') not in ['configuration_file', 'configuration_file_decomposed']
+            if doc.get('type') != 'configuration_file'
         ]
         removed_doc_count = original_doc_count - len(rag_data['documents'])
         if removed_doc_count > 0:
@@ -582,13 +1055,31 @@ class ConfigurationProcessor(BaseProcessor):
         rag_data['documents'].extend(documents)
         self.logger.info(f"Added {len(documents)} new configuration documents")
 
+        # Remove existing configuration relationships (STORED_ON, STORES, CONFIGURES, CONFIGURED_BY)
+        if 'relationships' not in rag_data:
+            rag_data['relationships'] = []
+
+        original_rel_count = len(rag_data['relationships'])
+        rag_data['relationships'] = [
+            rel for rel in rag_data['relationships']
+            if rel.get('type') not in ['STORED_ON', 'STORES', 'CONFIGURES', 'CONFIGURED_BY']
+            or rel.get('source_type') != 'configuration_file' and rel.get('target_type') != 'configuration_file'
+        ]
+        removed_rel_count = original_rel_count - len(rag_data['relationships'])
+        if removed_rel_count > 0:
+            self.logger.info(f"Removed {removed_rel_count} existing configuration relationships")
+
+        # Add new configuration relationships
+        rag_data['relationships'].extend(relationships)
+        self.logger.info(f"Added {len(relationships)} new configuration relationships")
+
         # Update metadata
         rag_data['metadata']['export_timestamp'] = datetime.now().isoformat()
 
-        # Count configuration documents (both types)
+        # Count configuration documents
         config_doc_count = len([
             doc for doc in rag_data['documents']
-            if doc.get('type') in ['configuration_file', 'configuration_file_decomposed']
+            if doc.get('type') == 'configuration_file'
         ])
         rag_data['metadata']['total_configuration_files'] = config_doc_count
 

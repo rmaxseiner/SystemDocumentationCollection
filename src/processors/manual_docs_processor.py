@@ -77,7 +77,6 @@ class ManualDocsProcessor(BaseProcessor):
 
             # Process each manual file
             all_documents = []
-            all_entities = {'systems': {}, 'services': {}, 'categories': {}, 'infrastructure': {}}
             all_relationships = []
 
             for file_path in manual_files:
@@ -87,14 +86,6 @@ class ManualDocsProcessor(BaseProcessor):
                         # Collect documents
                         all_documents.extend(doc_result.get('documents', []))
 
-                        # Collect entities
-                        entities = doc_result.get('entities', {})
-                        for category, entity_dict in entities.items():
-                            if category in all_entities:
-                                all_entities[category].update(entity_dict)
-                            else:
-                                all_entities[category] = entity_dict
-
                         # Collect relationships
                         all_relationships.extend(doc_result.get('relationships', []))
 
@@ -103,9 +94,9 @@ class ManualDocsProcessor(BaseProcessor):
                     continue
 
             # Update rag_data.json
-            rag_data_file = self._update_rag_data_json(all_documents, all_entities, all_relationships, output_path)
+            rag_data_file = self._update_rag_data_json(all_documents, all_relationships, output_path)
 
-            self.logger.info(f"Manual docs processing completed: {len(all_documents)} documents, {sum(len(e) for e in all_entities.values())} entities, {len(all_relationships)} relationships")
+            self.logger.info(f"Manual docs processing completed: {len(all_documents)} documents, {len(all_relationships)} relationships")
 
             return ProcessingResult(
                 success=True,
@@ -113,7 +104,6 @@ class ManualDocsProcessor(BaseProcessor):
                     'rag_data_file': str(rag_data_file),
                     'files_processed': len(manual_files),
                     'documents_generated': len(all_documents),
-                    'entities_generated': sum(len(e) for e in all_entities.values()),
                     'relationships_generated': len(all_relationships),
                     'output_directory': str(output_path)
                 },
@@ -121,7 +111,6 @@ class ManualDocsProcessor(BaseProcessor):
                     'processor_type': 'manual_docs',
                     'files_processed': len(manual_files),
                     'documents_generated': len(all_documents),
-                    'entities_generated': sum(len(e) for e in all_entities.values()),
                     'relationships_generated': len(all_relationships),
                     'output_directory': str(output_path)
                 }
@@ -153,7 +142,7 @@ class ManualDocsProcessor(BaseProcessor):
         return manual_files
 
     def _process_manual_file(self, file_path: Path) -> Optional[Dict[str, Any]]:
-        """Process a single manual documentation JSON file with new structured format"""
+        """Process a single manual documentation JSON file with standardized format"""
         self.logger.debug(f"Processing manual file: {file_path}")
 
         try:
@@ -161,12 +150,15 @@ class ManualDocsProcessor(BaseProcessor):
             with open(file_path, 'r', encoding='utf-8') as f:
                 manual_data = json.load(f)
 
-            # Validate new structured format
+            # Validate structured format
             if not self._validate_structured_format(manual_data, file_path):
                 return None
 
-            # Add processing metadata to each document
+            # Get documents and relationships
             documents = manual_data.get('documents', [])
+            relationships = manual_data.get('relationships', [])
+
+            # Add processing metadata to each document
             for doc in documents:
                 if 'metadata' not in doc:
                     doc['metadata'] = {}
@@ -180,8 +172,7 @@ class ManualDocsProcessor(BaseProcessor):
                 except Exception as e:
                     self.logger.warning(f"Content validation failed for document {doc.get('id', 'unknown')}: {e}")
 
-            # Add processing metadata to each relationship
-            relationships = manual_data.get('relationships', [])
+            # Add processing metadata to relationships
             for rel in relationships:
                 if 'metadata' not in rel:
                     rel['metadata'] = {}
@@ -191,7 +182,6 @@ class ManualDocsProcessor(BaseProcessor):
 
             return {
                 'documents': documents,
-                'entities': manual_data.get('entities', {}),
                 'relationships': relationships
             }
 
@@ -200,47 +190,94 @@ class ManualDocsProcessor(BaseProcessor):
             return None
 
     def _validate_structured_format(self, manual_data: Dict[str, Any], file_path: Path) -> bool:
-        """Validate that the manual doc has required structured format"""
-        required_sections = ['documents', 'entities', 'relationships']
+        """
+        Validate that the manual doc has required structured format.
 
-        for section in required_sections:
-            if section not in manual_data:
-                self.logger.error(f"Missing required section '{section}' in {file_path}")
-                return False
+        Required structure:
+        - Root: Only 'documents' and 'relationships' keys allowed
+        - Documents: id, type, title, content, metadata, details (no extra fields)
+        - Relationships: id, type, source_id, source_type, target_id, target_type (optional: metadata)
+        """
 
-        # Validate documents section
-        documents = manual_data.get('documents', [])
+        # Validate root keys - only documents and relationships allowed
+        allowed_root_keys = {'documents', 'relationships'}
+        actual_root_keys = set(manual_data.keys())
+        extra_keys = actual_root_keys - allowed_root_keys
+
+        if extra_keys:
+            self.logger.error(f"Invalid root keys in {file_path}: {extra_keys}. Only 'documents' and 'relationships' allowed.")
+            return False
+
+        # Validate documents section (required)
+        if 'documents' not in manual_data:
+            self.logger.error(f"Missing required section 'documents' in {file_path}")
+            return False
+
+        documents = manual_data['documents']
         if not isinstance(documents, list):
             self.logger.error(f"'documents' must be a list in {file_path}")
             return False
 
-        # Validate each document
-        required_doc_fields = ['id', 'type', 'title', 'content', 'metadata', 'tags']
+        # Validate each document structure
+        required_doc_fields = {'id', 'type', 'title', 'content', 'metadata', 'details'}
+
         for i, doc in enumerate(documents):
-            for field in required_doc_fields:
-                if field not in doc:
-                    self.logger.error(f"Missing required field '{field}' in document {i} of {file_path}")
+            if not isinstance(doc, dict):
+                self.logger.error(f"Document {i} must be a dict in {file_path}")
+                return False
+
+            actual_doc_fields = set(doc.keys())
+
+            # Check for missing required fields
+            missing_fields = required_doc_fields - actual_doc_fields
+            if missing_fields:
+                self.logger.error(f"Document {i} in {file_path} missing required fields: {missing_fields}")
+                return False
+
+            # Check for extra fields
+            extra_fields = actual_doc_fields - required_doc_fields
+            if extra_fields:
+                self.logger.error(f"Document {i} in {file_path} has invalid extra fields: {extra_fields}")
+                return False
+
+        # Validate relationships section (optional)
+        if 'relationships' in manual_data:
+            relationships = manual_data['relationships']
+            if not isinstance(relationships, list):
+                self.logger.error(f"'relationships' must be a list in {file_path}")
+                return False
+
+            # Validate each relationship structure
+            required_rel_fields = {'id', 'type', 'source_id', 'source_type', 'target_id', 'target_type'}
+            optional_rel_fields = {'metadata'}
+            allowed_rel_fields = required_rel_fields | optional_rel_fields
+
+            for i, rel in enumerate(relationships):
+                if not isinstance(rel, dict):
+                    self.logger.error(f"Relationship {i} must be a dict in {file_path}")
                     return False
 
-        # Validate entities section
-        entities = manual_data.get('entities', {})
-        if not isinstance(entities, dict):
-            self.logger.error(f"'entities' must be a dict in {file_path}")
-            return False
+                actual_rel_fields = set(rel.keys())
 
-        # Validate relationships section
-        relationships = manual_data.get('relationships', [])
-        if not isinstance(relationships, list):
-            self.logger.error(f"'relationships' must be a list in {file_path}")
-            return False
+                # Check for missing required fields
+                missing_fields = required_rel_fields - actual_rel_fields
+                if missing_fields:
+                    self.logger.error(f"Relationship {i} in {file_path} missing required fields: {missing_fields}")
+                    return False
 
-        self.logger.debug(f"Validated structured format for {file_path}: {len(documents)} docs, {sum(len(e) for e in entities.values())} entities, {len(relationships)} relationships")
+                # Check for extra fields
+                extra_fields = actual_rel_fields - allowed_rel_fields
+                if extra_fields:
+                    self.logger.error(f"Relationship {i} in {file_path} has invalid extra fields: {extra_fields}")
+                    return False
+
+        self.logger.debug(f"Validation passed for {file_path.name}")
         return True
 
 
-    def _update_rag_data_json(self, documents: List[Dict[str, Any]], entities: Dict[str, Dict[str, Any]],
+    def _update_rag_data_json(self, documents: List[Dict[str, Any]],
                               relationships: List[Dict[str, Any]], output_path: Path) -> Path:
-        """Update rag_data.json with manual documentation including documents, entities, and relationships"""
+        """Update rag_data.json with manual documentation including documents and relationships"""
         rag_data_file = output_path / 'rag_data.json'
 
         # Load existing rag_data.json or create new structure
@@ -256,11 +293,12 @@ class ManualDocsProcessor(BaseProcessor):
             self.logger.info("Creating new rag_data.json")
             rag_data = self._create_empty_rag_data()
 
-        # Remove existing manual documents, entities, and relationships
+        # Remove existing manual documents and relationships
+        # Filter by metadata.source_type == 'manual'
         original_doc_count = len(rag_data.get('documents', []))
         rag_data['documents'] = [
             doc for doc in rag_data.get('documents', [])
-            if not doc.get('id', '').startswith('manual_')
+            if doc.get('metadata', {}).get('source_type') != 'manual'
         ]
         removed_doc_count = original_doc_count - len(rag_data['documents'])
         if removed_doc_count > 0:
@@ -280,31 +318,6 @@ class ManualDocsProcessor(BaseProcessor):
         rag_data['documents'].extend(documents)
         self.logger.info(f"Added {len(documents)} new manual documents")
 
-        # Update entities
-        if entities:
-            # Ensure entities structure exists
-            if 'entities' not in rag_data:
-                rag_data['entities'] = {'systems': {}, 'services': {}, 'categories': {}, 'infrastructure': {}}
-
-            # Merge entities into each category
-            for category, entity_dict in entities.items():
-                if category not in rag_data['entities']:
-                    rag_data['entities'][category] = {}
-
-                # Remove existing manual entities from this category
-                keys_to_remove = [
-                    key for key in rag_data['entities'][category].keys()
-                    if key.startswith('manual_') or
-                       (isinstance(rag_data['entities'][category][key], dict) and
-                        rag_data['entities'][category][key].get('source') == 'manual')
-                ]
-                for key in keys_to_remove:
-                    del rag_data['entities'][category][key]
-
-                # Add new entities
-                rag_data['entities'][category].update(entity_dict)
-                self.logger.info(f"Added {len(entity_dict)} entities to category '{category}'")
-
         # Add new relationships
         rag_data['relationships'].extend(relationships)
         self.logger.info(f"Added {len(relationships)} new manual relationships")
@@ -323,7 +336,7 @@ class ManualDocsProcessor(BaseProcessor):
         with open(rag_data_file, 'w') as f:
             json.dump(rag_data, f, indent=2, default=str)
 
-        self.logger.info(f"Updated rag_data.json with {len(documents)} documents, {sum(len(e) for e in entities.values())} entities, {len(relationships)} relationships")
+        self.logger.info(f"Updated rag_data.json with {len(documents)} documents and {len(relationships)} relationships")
         return rag_data_file
 
     def _create_empty_rag_data(self) -> Dict[str, Any]:

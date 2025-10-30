@@ -30,7 +30,7 @@ class PhysicalStorageSubProcessor(SubProcessor):
     def get_section_name(self) -> str:
         return "physical_storage"
 
-    def process(self, section_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def process(self, section_data: Dict[str, Any]) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         Process hardware section data to extract storage devices
 
@@ -53,18 +53,18 @@ class PhysicalStorageSubProcessor(SubProcessor):
                 }
 
         Returns:
-            List containing a single consolidated storage document
+            Tuple of (documents, relationships)
         """
         self.log_start()
 
         if not self.validate_section_data(section_data):
-            return []
+            return [], []
 
         storage_devices = section_data.get('storage_devices', [])
 
         if not storage_devices:
             self.logger.info(f"No storage devices found in hardware section for {self.system_name}")
-            return []
+            return [], []
 
         self.logger.info(f"Processing {len(storage_devices)} storage devices from {self.system_name}")
 
@@ -72,10 +72,11 @@ class PhysicalStorageSubProcessor(SubProcessor):
         storage_doc = self._create_consolidated_storage_document(storage_devices)
 
         documents = [storage_doc] if storage_doc else []
+        relationships = []  # TODO: Will be implemented later
 
         self.log_end(len(documents))
 
-        return documents
+        return documents, relationships
 
     def _create_consolidated_storage_document(self, storage_devices: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Create consolidated storage document for all devices on this host"""
@@ -173,9 +174,6 @@ class PhysicalStorageSubProcessor(SubProcessor):
             'host_type': 'server'  # Could be enhanced to detect VM/physical
         }
 
-        # Generate tags
-        tags = ['hardware', 'physical_storage', 'storage', 'infrastructure']
-
         document = {
             'id': f'storage_{self.system_name}',
             'type': 'physical_storage',
@@ -183,8 +181,7 @@ class PhysicalStorageSubProcessor(SubProcessor):
             'content': content,
             'metadata': metadata,
             'relationships': relationships,
-            'physical_devices': physical_devices,
-            'tags': tags
+            'physical_devices': physical_devices
         }
 
         return document

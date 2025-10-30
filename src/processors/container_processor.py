@@ -126,7 +126,8 @@ class ContainerProcessor(BaseProcessor):
 
             # Group containers into services
             self.logger.info("Grouping containers into services...")
-            updated_containers, service_documents = self.service_grouper.group_containers_into_services(container_documents)
+            updated_containers, service_documents, service_relationships = self.service_grouper.group_containers_into_services(container_documents)
+            self.logger.info(f"Generated {len(service_relationships)} service relationships")
 
             # Save containers.jsonl
             containers_file = self._save_containers_jsonl(updated_containers, output_path)
@@ -138,6 +139,7 @@ class ContainerProcessor(BaseProcessor):
             rag_data_file = self._update_rag_data_json(
                 updated_containers,
                 service_documents,
+                service_relationships,
                 collected_data,
                 output_path
             )
@@ -353,8 +355,7 @@ class ContainerProcessor(BaseProcessor):
                 "devices": device_list,
                 "labels": labels,
                 "restart_policy": restart_policy_name
-            },
-            "tags": rag_entity.get('tags', [])
+            }
         }
 
         # Validate content length
@@ -543,10 +544,11 @@ class ContainerProcessor(BaseProcessor):
         self,
         container_documents: List[Dict[str, Any]],
         service_documents: List[Dict[str, Any]],
+        service_relationships: List[Dict[str, Any]],
         collected_data: Dict[str, Any],
         output_path: Path
     ) -> Path:
-        """Update rag_data.json with container and service documents"""
+        """Update rag_data.json with container and service documents and relationships"""
         rag_data_file = output_path / 'rag_data.json'
 
         # Load existing rag_data.json or create new structure
@@ -583,6 +585,23 @@ class ContainerProcessor(BaseProcessor):
         rag_data['documents'].extend(service_documents)
         self.logger.info(f"Added {len(service_documents)} new service documents")
 
+        # Remove existing service relationships (PROVIDES_SERVICE/PROVIDED_BY)
+        if 'relationships' not in rag_data:
+            rag_data['relationships'] = []
+
+        original_rel_count = len(rag_data['relationships'])
+        rag_data['relationships'] = [
+            rel for rel in rag_data['relationships']
+            if rel.get('type') not in ['PROVIDES_SERVICE', 'PROVIDED_BY']
+        ]
+        removed_rel_count = original_rel_count - len(rag_data['relationships'])
+        if removed_rel_count > 0:
+            self.logger.info(f"Removed {removed_rel_count} existing service relationships")
+
+        # Add new service relationships
+        rag_data['relationships'].extend(service_relationships)
+        self.logger.info(f"Added {len(service_relationships)} new service relationships")
+
         # Update host entities in entities.systems
         self._update_host_entities(rag_data, collected_data)
 
@@ -596,6 +615,7 @@ class ContainerProcessor(BaseProcessor):
             doc for doc in rag_data['documents']
             if doc.get('type') == 'service' and doc.get('id', '').startswith('service_')
         ])
+        rag_data['metadata']['total_relationships'] = len(rag_data.get('relationships', []))
 
         # Save updated rag_data.json
         with open(rag_data_file, 'w') as f:

@@ -59,3 +59,27 @@ class BaseConfigParser(ABC):
             List of strings to add to document tags
         """
         pass
+
+    def create_relationships(
+        self,
+        config_id: str,
+        parsed_config: Dict[str, Any],
+        hostname: str,
+        collected_data: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Create relationships between this configuration file and other entities.
+
+        This is an optional method - parsers that need to create relationships
+        (like docker-compose, prometheus) can override this method.
+
+        Args:
+            config_id: Configuration file entity ID
+            parsed_config: The parsed configuration dictionary
+            hostname: Hostname where config file is located
+            collected_data: Full collected data (unified JSON) for accessing additional info
+
+        Returns:
+            List of relationship dictionaries
+        """
+        return []

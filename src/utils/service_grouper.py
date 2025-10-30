@@ -11,26 +11,38 @@ Priority Order:
 """
 
 import logging
-from typing import Dict, List, Any, Set, Tuple
+import yaml
+from typing import Dict, List, Any, Set, Tuple, Optional
 from collections import defaultdict
+from pathlib import Path
+from datetime import datetime
 import re
+
+from ..processors.relationship_helper import RelationshipHelper
 
 
 class ServiceGrouper:
     """Groups containers into logical services based on priority-ordered heuristics"""
 
-    def __init__(self, allow_multi_host_services: bool = True):
+    def __init__(self, allow_multi_host_services: bool = True, manual_definitions_path: Optional[str] = None):
         """
         Initialize ServiceGrouper
 
         Args:
             allow_multi_host_services: If True, services can span multiple hosts.
                                        If False, services are per-host only (legacy behavior).
+            manual_definitions_path: Path to services.yml manual definitions file.
+                                    Defaults to 'infrastructure-docs/manual/services.yml'
         """
         self.logger = logging.getLogger('service_grouper')
         self.allow_multi_host_services = allow_multi_host_services
 
-    def group_containers_into_services(self, containers: List[Dict[str, Any]]) -> Tuple[List[Dict], List[Dict]]:
+        # Load manual service definitions
+        if manual_definitions_path is None:
+            manual_definitions_path = 'infrastructure-docs/manual/services.yml'
+        self.manual_definitions = self._load_manual_definitions(manual_definitions_path)
+
+    def group_containers_into_services(self, containers: List[Dict[str, Any]]) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """
         Group containers into services using priority-based heuristics.
 
@@ -38,9 +50,10 @@ class ServiceGrouper:
             containers: List of container documents
 
         Returns:
-            Tuple of (updated_containers, service_documents)
+            Tuple of (updated_containers, service_documents, relationships)
             - updated_containers: Containers with service_id added
             - service_documents: Generated service documents
+            - relationships: PROVIDES_SERVICE/PROVIDED_BY relationships
         """
         self.logger.info(f"Grouping {len(containers)} containers into services")
 
@@ -80,10 +93,43 @@ class ServiceGrouper:
 
         # Update containers with service_id and generate service documents
         updated_containers = self._update_containers_with_service_id(containers, service_groups)
-        service_documents = self._generate_service_documents(service_groups, containers)
+        service_documents, relationships = self._generate_service_documents(service_groups, containers)
 
         self.logger.info(f"Created {len(service_documents)} services from {len(containers)} containers")
-        return updated_containers, service_documents
+        self.logger.info(f"Generated {len(relationships)} service relationships")
+        return updated_containers, service_documents, relationships
+
+    def _load_manual_definitions(self, path: str) -> Dict[str, Dict[str, Any]]:
+        """
+        Load manual service definitions from YAML file.
+
+        Args:
+            path: Path to services.yml file
+
+        Returns:
+            Dictionary mapping service_name to manual definitions
+        """
+        definitions_path = Path(path)
+
+        if not definitions_path.exists():
+            self.logger.info(f"No manual service definitions found at {path}")
+            return {}
+
+        try:
+            with open(definitions_path, 'r') as f:
+                data = yaml.safe_load(f)
+
+            if not data or 'services' not in data:
+                self.logger.warning(f"services.yml at {path} has no 'services' section")
+                return {}
+
+            services = data['services']
+            self.logger.info(f"Loaded manual definitions for {len(services)} services from {path}")
+            return services
+
+        except Exception as e:
+            self.logger.error(f"Failed to load manual service definitions from {path}: {e}")
+            return {}
 
     def _group_by_labels(
         self,
@@ -393,9 +439,15 @@ class ServiceGrouper:
         self,
         service_groups: Dict,
         containers: List[Dict]
-    ) -> List[Dict]:
-        """Generate service documents from service groups"""
+    ) -> Tuple[List[Dict], List[Dict]]:
+        """
+        Generate service documents from service groups using 3-tier schema format.
+
+        Returns:
+            Tuple of (service_documents, relationships)
+        """
         service_documents = []
+        relationships = []
 
         for service_id, service_info in service_groups.items():
             service_name = service_info['service_name']
@@ -429,14 +481,6 @@ class ServiceGrouper:
             else:
                 service_status = 'stopped'
 
-            # Generate content
-            content = self._generate_service_content(
-                service_name,
-                service_containers,
-                hosted_by,
-                service_info
-            )
-
             # Get all images used by this service
             images = list(set(c.get('metadata', {}).get('image', 'unknown') for c in service_containers))
 
@@ -445,30 +489,213 @@ class ServiceGrouper:
             for container in service_containers:
                 networks.update(container.get('metadata', {}).get('networks', []))
 
-            # Create service document
+            # Get manual definition for this service (if exists)
+            manual_def = self.manual_definitions.get(service_name, {})
+
+            # Generate rich content description
+            content = self._generate_service_content_rich(
+                service_name,
+                service_containers,
+                hosted_by,
+                service_info,
+                manual_def
+            )
+
+            # Build title
+            title = f"{service_name} Service"
+
+            # Build tier 2 metadata (merge auto-discovered + manual)
+            metadata = {
+                # Identity
+                'service_name': service_name,
+                'service_type': manual_def.get('service_type'),
+
+                # Access Information (will be populated by DNS/NPM post-processing)
+                'primary_url': None,
+                'primary_ip': None,
+                'primary_port': None,
+                'bind_ip': None,
+                'bind_port': None,
+                'bind_protocol': None,
+                'access_type': None,
+                'publicly_accessible': None,
+
+                # Component counts
+                'container_count': len(service_containers),
+                'virtual_server_count': 0,  # May be updated by post-processing
+                'configuration_count': 0,  # May be updated by post-processing
+
+                # Service Properties
+                'criticality': manual_def.get('criticality'),
+                'environment': manual_def.get('environment'),
+                'owner': manual_def.get('owner'),
+
+                # Status
+                'status': service_status,
+
+                # Container details
+                'containers': container_ids,
+                'primary_container': primary_container['id'],
+
+                # Additional metadata
+                'hosted_by': hosted_by,
+                'images': images,
+                'networks': list(networks),
+                'grouping_method': service_info['grouping_method'],
+                'grouping_details': service_info['grouping_details'],
+
+                # Timestamps
+                'last_updated': datetime.now().isoformat()
+            }
+
+            # Build tier 3 details (from manual definitions)
+            details = {
+                'description': manual_def.get('description'),
+                'purpose': manual_def.get('purpose'),
+                'authentication': manual_def.get('authentication'),
+                'properties': manual_def.get('properties'),
+                'documentation': manual_def.get('documentation'),
+                'technology': manual_def.get('technology'),
+                'features': manual_def.get('features'),
+                'notes': manual_def.get('notes')
+            }
+
+            # Create 3-tier service document
             service_doc = {
+                # Root
                 'id': service_id,
                 'type': 'service',
-                'title': f"{service_name} service on {hosted_by}",
+
+                # Tier 1: Vector Search
+                'title': title,
                 'content': content,
-                'metadata': {
-                    'service_name': service_name,
-                    'hosted_by': hosted_by,
-                    'container_count': len(service_containers),
-                    'containers': container_ids,
-                    'primary_container': primary_container['id'],
-                    'status': service_status,
-                    'images': images,
-                    'networks': list(networks),
-                    'grouping_method': service_info['grouping_method'],
-                    'grouping_details': service_info['grouping_details']
-                },
-                'tags': self._generate_service_tags(service_name, service_containers)
+
+                # Tier 2: Metadata
+                'metadata': metadata,
+
+                # Tier 3: Details
+                'details': details
             }
 
             service_documents.append(service_doc)
 
-        return service_documents
+            # Create PROVIDES_SERVICE / PROVIDED_BY relationships
+            # Each container PROVIDES_SERVICE to this service
+            for container in service_containers:
+                container_id = container['id']
+                container_type = container.get('type', 'container')
+
+                service_rels = RelationshipHelper.create_bidirectional_relationship(
+                    source_id=container_id,
+                    source_type=container_type,
+                    target_id=service_id,
+                    target_type='service',
+                    forward_type='PROVIDES_SERVICE',
+                    metadata={
+                        'service_name': service_name,
+                        'is_primary': (container_id == primary_container['id'])
+                    }
+                )
+                relationships.extend(service_rels)
+
+        return service_documents, relationships
+
+    def _generate_service_content_rich(
+        self,
+        service_name: str,
+        containers: List[Dict],
+        hosted_by: str,
+        service_info: Dict,
+        manual_def: Dict
+    ) -> str:
+        """
+        Generate rich natural language content for service document.
+        Incorporates manual definition data when available.
+        """
+        content_parts = []
+
+        # Start with manual description if available
+        if manual_def.get('description'):
+            content_parts.append(manual_def['description'])
+        else:
+            # Fall back to basic description
+            if len(containers) == 1:
+                content_parts.append(
+                    f"{service_name} is a standalone service running on {hosted_by}."
+                )
+            else:
+                content_parts.append(
+                    f"{service_name} is a multi-container service running on {hosted_by} with {len(containers)} containers."
+                )
+
+        # Add purpose if available
+        if manual_def.get('purpose'):
+            content_parts.append(f"Purpose: {manual_def['purpose']}")
+
+        # Add service type information
+        service_type = manual_def.get('service_type')
+        if not service_type:
+            service_type = self._infer_service_category(service_name, containers)
+        if service_type:
+            content_parts.append(f"Service type: {service_type}.")
+
+        # Container information
+        if len(containers) > 1:
+            container_names = [c.get('metadata', {}).get('container_name') for c in containers]
+            content_parts.append(
+                f"Comprises {len(containers)} containers: {', '.join(container_names)}."
+            )
+        else:
+            container_name = containers[0].get('metadata', {}).get('container_name')
+            content_parts.append(f"Running in container: {container_name}.")
+
+        # Technology stack
+        tech = manual_def.get('technology', {})
+        tech_parts = []
+        if tech.get('primary_language'):
+            tech_parts.append(tech['primary_language'])
+        if tech.get('framework'):
+            tech_parts.append(tech['framework'])
+        if tech.get('database'):
+            tech_parts.append(f"using {tech['database']}")
+        if tech_parts:
+            content_parts.append(f"Technology stack: {', '.join(tech_parts)}.")
+
+        # Features
+        features = manual_def.get('features', [])
+        if features:
+            content_parts.append(f"Key features: {', '.join(features)}.")
+
+        # Authentication
+        auth = manual_def.get('authentication', {})
+        if auth and auth.get('required'):
+            auth_method = auth.get('method', 'unknown')
+            if auth.get('sso_provider'):
+                content_parts.append(f"Requires authentication via {auth_method} ({auth['sso_provider']}).")
+            else:
+                content_parts.append(f"Requires {auth_method} authentication.")
+        elif auth and not auth.get('required'):
+            content_parts.append("No authentication required.")
+
+        # Environment and criticality
+        props = manual_def.get('properties', {})
+        env = manual_def.get('environment') or props.get('environment')
+        criticality = manual_def.get('criticality') or props.get('criticality')
+        if env and criticality:
+            content_parts.append(f"Runs in {env} environment with {criticality} criticality.")
+        elif env:
+            content_parts.append(f"Environment: {env}.")
+        elif criticality:
+            content_parts.append(f"Criticality: {criticality}.")
+
+        # Grouping method (technical detail)
+        grouping_method = service_info['grouping_method']
+        if grouping_method != 'standalone':
+            content_parts.append(
+                f"Containers grouped by {grouping_method.replace('_', ' ')}."
+            )
+
+        return ' '.join(content_parts)
 
     def _generate_service_content(
         self,

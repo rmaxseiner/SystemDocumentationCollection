@@ -35,7 +35,7 @@ class DockerComposeSubProcessor(SubProcessor):
     def get_section_name(self) -> str:
         return "docker_compose"
 
-    def process(self, section_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def process(self, section_data: Dict[str, Any]) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         Process docker_compose section data
 
@@ -56,22 +56,23 @@ class DockerComposeSubProcessor(SubProcessor):
                 }
 
         Returns:
-            List of RAG documents for compose files and services
+            Tuple of (documents, relationships)
         """
         self.log_start()
 
         if not self.validate_section_data(section_data):
-            return []
+            return [], []
 
         compose_files = section_data.get('compose_files', [])
 
         if not compose_files:
             self.logger.info(f"No compose files found in docker_compose section for {self.system_name}")
-            return []
+            return [], []
 
         self.logger.info(f"Processing {len(compose_files)} docker-compose files from {self.system_name}")
 
         documents = []
+        relationships = []  # TODO: Will be implemented later
 
         # Process each compose file
         for compose_file in compose_files:
@@ -86,7 +87,7 @@ class DockerComposeSubProcessor(SubProcessor):
 
         self.log_end(len(documents))
 
-        return documents
+        return documents, relationships
 
     def _create_compose_file_document(self, compose_file: Dict[str, Any]) -> Dict[str, Any]:
         """Create document for a docker-compose file"""
@@ -161,16 +162,12 @@ class DockerComposeSubProcessor(SubProcessor):
             'last_updated': datetime.now().isoformat()
         }
 
-        # Generate tags
-        tags = ['docker', 'docker-compose', 'infrastructure', 'configuration']
-
         document = {
             'id': f'compose_file_{self.system_name}_{project_name}',
             'type': 'docker_compose_file',
             'title': f'Docker Compose: {project_name} on {self.system_name}',
             'content': content,
-            'metadata': metadata,
-            'tags': tags
+            'metadata': metadata
         }
 
         return document
@@ -254,28 +251,12 @@ class DockerComposeSubProcessor(SubProcessor):
             'last_updated': datetime.now().isoformat()
         }
 
-        # Generate tags
-        tags = ['docker', 'docker-compose', 'service', 'configuration']
-
-        # Add technology-specific tags based on image
-        if image:
-            image_lower = image.lower()
-            if 'postgres' in image_lower or 'mysql' in image_lower:
-                tags.append('database')
-            elif 'redis' in image_lower:
-                tags.append('cache')
-            elif 'nginx' in image_lower:
-                tags.append('proxy')
-            elif 'prometheus' in image_lower or 'grafana' in image_lower:
-                tags.append('monitoring')
-
         document = {
             'id': f'compose_service_{self.system_name}_{project_name}_{service_name}',
             'type': 'docker_compose_service',
             'title': f'Compose Service: {service_name} ({project_name})',
             'content': content,
-            'metadata': metadata,
-            'tags': tags
+            'metadata': metadata
         }
 
         return document

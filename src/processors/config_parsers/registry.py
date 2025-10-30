@@ -9,6 +9,7 @@ import logging
 
 from .base import BaseConfigParser
 from .nginx_proxy import NPMConfigParser
+from .docker_compose import DockerComposeParser
 
 
 class ParserRegistry:
@@ -25,10 +26,12 @@ class ParserRegistry:
         self.logger = logging.getLogger('parser_registry')
         self.parsers: List[BaseConfigParser] = [
             NPMConfigParser(),
+            DockerComposeParser(),
             # Future parsers can be added here:
             # ApacheConfigParser(),
             # HAProxyConfigParser(),
             # PrometheusConfigParser(),
+            # AuthentikConfigParser(),
             # etc.
         ]
         self.logger.info(f"Initialized parser registry with {len(self.parsers)} parsers")

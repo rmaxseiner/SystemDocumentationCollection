@@ -1,0 +1,615 @@
+# Container Entity Schema
+# Defines the structure for container documents (Docker containers) in rag_data.json
+
+entity_type: container
+description: Docker container entity running on physical or virtual servers
+
+# Root level fields
+root:
+  id:
+    type: string
+    required: true
+    pattern: "^container_[a-zA-Z0-9_.-]+_[a-zA-Z0-9_.-]+$"
+    description: "Unique identifier in format: container_{hostname}_{container_name}"
+    example: "container_SCS-LLM-01_infrastructure-mcp"
+
+  type:
+    type: string
+    required: true
+    enum: [container]
+    description: "Entity type discriminator"
+
+# Tier 1: Vector Search Content
+tier1:
+  title:
+    type: string
+    required: true
+    description: "Human-readable title"
+    example: "infrastructure-mcp Docker Container on SCS-LLM-01"
+
+  content:
+    type: string
+    required: true
+    min_length: 50
+    description: "Rich description for vector matching including image, state, network, purpose"
+
+# Tier 2: Summary Metadata
+tier2:
+  metadata:
+    type: object
+    required: true
+    fields:
+      # Identity
+      hostname:
+        type: string
+        required: true
+        description: "Host where container runs"
+
+      container_name:
+        type: string
+        required: true
+        description: "Container name"
+
+      container_id:
+        type: string
+        required: false
+        nullable: true
+        description: "Docker short ID"
+
+      # Image
+      image:
+        type: string
+        required: true
+        description: "Full image reference"
+
+      image_tag:
+        type: string
+        required: false
+        nullable: true
+        description: "Image tag extracted from image"
+
+      # State
+      state:
+        type: string
+        required: true
+        enum: ["running", "stopped", "paused", "restarting", "dead", "created", "exited"]
+        description: "Current operational state"
+
+      restart_policy:
+        type: string
+        required: true
+        description: "Container restart policy"
+        examples: ["unless-stopped", "always", "on-failure", "no"]
+
+      # Network
+      primary_network:
+        type: string
+        required: false
+        nullable: true
+        description: "Primary network name"
+
+      networks:
+        type: array
+        required: true
+        item_type: string
+        description: "List of network names"
+
+      # Ports
+      published_ports:
+        type: array
+        required: true
+        description: "Ports published to host"
+        item_schema:
+          type: object
+          fields:
+            host_port:
+              type: integer
+              required: true
+            container_port:
+              type: integer
+              required: true
+            protocol:
+              type: string
+              required: true
+              enum: ["tcp", "udp"]
+
+      exposed_ports:
+        type: array
+        required: false
+        nullable: true
+        item_type: string
+        description: "Exposed but not published ports"
+
+      # Compose/Stack
+      compose_project:
+        type: string
+        required: false
+        nullable: true
+        description: "Docker Compose project name"
+
+      compose_service:
+        type: string
+        required: false
+        nullable: true
+        description: "Docker Compose service name"
+
+      # Dependencies
+      depends_on:
+        type: array
+        required: false
+        nullable: true
+        item_type: string
+        description: "Service dependencies from compose"
+
+      # Environment
+      has_environment_vars:
+        type: boolean
+        required: true
+        description: "Whether container has environment variables"
+
+      environment_count:
+        type: integer
+        required: false
+        nullable: true
+        description: "Number of environment variables"
+
+      # Metadata
+      created_at:
+        type: string
+        required: false
+        nullable: true
+        format: iso8601
+        description: "When container was created"
+
+      last_updated:
+        type: string
+        required: true
+        format: iso8601
+        description: "When data was collected"
+
+# Tier 3: Detailed Information
+tier3:
+  details:
+    type: object
+    required: true
+    fields:
+      # Image Details
+      image:
+        type: object
+        required: true
+        fields:
+          full_name:
+            type: string
+            required: true
+          registry:
+            type: string
+            required: false
+            nullable: true
+          repository:
+            type: string
+            required: true
+          tag:
+            type: string
+            required: true
+          image_id:
+            type: string
+            required: false
+            nullable: true
+          image_created:
+            type: string
+            required: false
+            nullable: true
+
+      # Network Details
+      networks:
+        type: array
+        required: true
+        description: "Detailed network configurations"
+        item_schema:
+          type: object
+          fields:
+            network_name:
+              type: string
+              required: true
+            network_id:
+              type: string
+              required: false
+              nullable: true
+            network_mode:
+              type: string
+              required: false
+              nullable: true
+            ip_address:
+              type: string
+              required: false
+              nullable: true
+            gateway:
+              type: string
+              required: false
+              nullable: true
+            subnet:
+              type: string
+              required: false
+              nullable: true
+            mac_address:
+              type: string
+              required: false
+              nullable: true
+            aliases:
+              type: array
+              required: false
+              nullable: true
+              item_type: string
+
+      # Port Mappings
+      ports:
+        type: array
+        required: true
+        description: "Detailed port mappings"
+        item_schema:
+          type: object
+          fields:
+            container_port:
+              type: integer
+              required: true
+            protocol:
+              type: string
+              required: true
+              enum: ["tcp", "udp"]
+            host_port:
+              type: integer
+              required: false
+              nullable: true
+            host_ip:
+              type: string
+              required: false
+              nullable: true
+
+      # Volume Mounts
+      mounts:
+        type: array
+        required: false
+        nullable: true
+        description: "Volume and bind mounts"
+        item_schema:
+          type: object
+          fields:
+            type:
+              type: string
+              required: true
+              enum: ["bind", "volume", "tmpfs"]
+            source:
+              type: string
+              required: false
+              nullable: true
+            destination:
+              type: string
+              required: true
+            mode:
+              type: string
+              required: false
+              nullable: true
+            propagation:
+              type: string
+              required: false
+              nullable: true
+            driver:
+              type: string
+              required: false
+              nullable: true
+            name:
+              type: string
+              required: false
+              nullable: true
+
+      # Environment Variables
+      environment:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          has_variables:
+            type: boolean
+            required: true
+          variable_count:
+            type: integer
+            required: true
+          variable_names:
+            type: array
+            required: false
+            nullable: true
+            item_type: string
+
+      # Resource Limits
+      resources:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          cpu_limit:
+            type: float
+            required: false
+            nullable: true
+          cpu_reservation:
+            type: float
+            required: false
+            nullable: true
+          cpu_shares:
+            type: integer
+            required: false
+            nullable: true
+          memory_limit_mb:
+            type: integer
+            required: false
+            nullable: true
+          memory_reservation_mb:
+            type: integer
+            required: false
+            nullable: true
+          memory_swap_mb:
+            type: integer
+            required: false
+            nullable: true
+          pids_limit:
+            type: integer
+            required: false
+            nullable: true
+          io_weight:
+            type: integer
+            required: false
+            nullable: true
+
+      # Devices
+      devices:
+        type: array
+        required: false
+        nullable: true
+        description: "Device mappings"
+        item_schema:
+          type: object
+          fields:
+            host_path:
+              type: string
+              required: true
+            container_path:
+              type: string
+              required: true
+            permissions:
+              type: string
+              required: true
+
+      # Health Check
+      healthcheck:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          test:
+            type: array
+            required: false
+            nullable: true
+            item_type: string
+          interval:
+            type: string
+            required: false
+            nullable: true
+          timeout:
+            type: string
+            required: false
+            nullable: true
+          retries:
+            type: integer
+            required: false
+            nullable: true
+          start_period:
+            type: string
+            required: false
+            nullable: true
+
+      # Docker Compose Configuration
+      compose:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          project:
+            type: string
+            required: false
+            nullable: true
+          service:
+            type: string
+            required: false
+            nullable: true
+          config_file:
+            type: string
+            required: false
+            nullable: true
+          config_hash:
+            type: string
+            required: false
+            nullable: true
+          working_dir:
+            type: string
+            required: false
+            nullable: true
+          container_number:
+            type: integer
+            required: false
+            nullable: true
+          oneoff:
+            type: boolean
+            required: false
+            nullable: true
+          version:
+            type: string
+            required: false
+            nullable: true
+          depends_on:
+            type: array
+            required: false
+            nullable: true
+            item_type: string
+
+      # Container Configuration
+      config:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          hostname:
+            type: string
+            required: false
+            nullable: true
+          domainname:
+            type: string
+            required: false
+            nullable: true
+          user:
+            type: string
+            required: false
+            nullable: true
+          working_dir:
+            type: string
+            required: false
+            nullable: true
+          entrypoint:
+            type: array
+            required: false
+            nullable: true
+            item_type: string
+          command:
+            type: array
+            required: false
+            nullable: true
+            item_type: string
+          shell:
+            type: array
+            required: false
+            nullable: true
+            item_type: string
+          privileged:
+            type: boolean
+            required: true
+          readonly_rootfs:
+            type: boolean
+            required: false
+            nullable: true
+          security_opt:
+            type: array
+            required: false
+            nullable: true
+            item_type: string
+          cap_add:
+            type: array
+            required: false
+            nullable: true
+            item_type: string
+          cap_drop:
+            type: array
+            required: false
+            nullable: true
+            item_type: string
+          pid_mode:
+            type: string
+            required: false
+            nullable: true
+          ipc_mode:
+            type: string
+            required: false
+            nullable: true
+          userns_mode:
+            type: string
+            required: false
+            nullable: true
+          tty:
+            type: boolean
+            required: false
+            nullable: true
+          stdin_open:
+            type: boolean
+            required: false
+            nullable: true
+          attach_stdin:
+            type: boolean
+            required: false
+            nullable: true
+          attach_stdout:
+            type: boolean
+            required: false
+            nullable: true
+          attach_stderr:
+            type: boolean
+            required: false
+            nullable: true
+
+      # Labels
+      labels:
+        type: object
+        required: false
+        nullable: true
+        description: "Docker metadata labels as key-value pairs"
+
+      # Runtime State
+      state:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          status:
+            type: string
+            required: true
+          running:
+            type: boolean
+            required: true
+          paused:
+            type: boolean
+            required: true
+          restarting:
+            type: boolean
+            required: true
+          oom_killed:
+            type: boolean
+            required: false
+            nullable: true
+          dead:
+            type: boolean
+            required: true
+          started_at:
+            type: string
+            required: false
+            nullable: true
+          finished_at:
+            type: string
+            required: false
+            nullable: true
+          exit_code:
+            type: integer
+            required: false
+            nullable: true
+          error:
+            type: string
+            required: false
+            nullable: true
+          pid:
+            type: integer
+            required: false
+            nullable: true
+          restart_count:
+            type: integer
+            required: false
+            nullable: true
+
+      # Platform
+      platform:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          architecture:
+            type: string
+            required: false
+            nullable: true
+          os:
+            type: string
+            required: false
+            nullable: true

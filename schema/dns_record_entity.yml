@@ -1,0 +1,243 @@
+# DNS Record Entity Schema
+# Defines the structure for dns_record documents in rag_data.json
+
+entity_type: dns_record
+description: DNS record entity for domain name resolution configuration
+
+# Root level fields
+root:
+  id:
+    type: string
+    required: true
+    pattern: "^dns_[a-zA-Z0-9_-]+$"
+    description: "Unique identifier in format: dns_{domain_slug}"
+    example: "dns_prometheus-maxseiner-casa"
+
+  type:
+    type: string
+    required: true
+    enum: [dns_record]
+    description: "Entity type discriminator"
+
+# Tier 1: Vector Search Content
+tier1:
+  title:
+    type: string
+    required: true
+    description: "Human-readable title for the DNS record"
+    example: "DNS Record - prometheus.maxseiner.casa"
+
+  content:
+    type: string
+    required: true
+    min_length: 50
+    description: "Rich description for vector matching including domain, resolution, purpose, and management"
+
+# Tier 2: Summary Metadata
+tier2:
+  metadata:
+    type: object
+    required: true
+    fields:
+      # DNS Record Details
+      domain:
+        type: string
+        required: true
+        description: "Domain name"
+        example: "prometheus.maxseiner.casa"
+
+      record_type:
+        type: string
+        required: true
+        enum: [A, AAAA, CNAME, MX, TXT, PTR, NS, SRV, CAA]
+        description: "DNS record type"
+
+      resolved_value:
+        type: string
+        required: true
+        description: "Resolved value (IP for A/AAAA, domain for CNAME, etc.)"
+        example: "10.20.0.162"
+
+      # For backward compatibility and common case (A records)
+      resolved_ip:
+        type: string
+        required: false
+        nullable: true
+        description: "Resolved IP address (if record_type is A/AAAA)"
+        example: "10.20.0.162"
+
+      # Record Properties
+      ttl:
+        type: integer
+        required: false
+        nullable: true
+        description: "Time to live in seconds"
+        example: 300
+
+      priority:
+        type: integer
+        required: false
+        nullable: true
+        description: "Priority (for MX records)"
+        example: 10
+
+      # Management
+      source:
+        type: string
+        required: true
+        description: "DNS management source"
+        examples: ["local_dns", "cloudflare", "route53", "pihole", "manual"]
+
+      zone:
+        type: string
+        required: false
+        nullable: true
+        description: "DNS zone"
+        example: "maxseiner.casa"
+
+      enabled:
+        type: boolean
+        required: true
+        description: "Whether DNS record is enabled"
+
+      # Metadata
+      created_at:
+        type: string
+        required: false
+        nullable: true
+        format: iso8601
+        description: "When DNS record was created"
+
+      last_updated:
+        type: string
+        required: true
+        format: iso8601
+        description: "When DNS record was last updated"
+
+# Tier 3: Detailed Information
+tier3:
+  details:
+    type: object
+    required: true
+    fields:
+      # DNS Provider
+      dns_provider:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          provider_name:
+            type: string
+            required: false
+            nullable: true
+            description: "DNS provider name"
+            examples: ["firewalla", "cloudflare", "pihole", "route53"]
+
+          provider_type:
+            type: string
+            required: false
+            nullable: true
+            enum: [local, cloud, forwarding, authoritative]
+            description: "Type of DNS provider"
+
+          management_url:
+            type: string
+            required: false
+            nullable: true
+            description: "URL to manage DNS records"
+            example: "https://192.168.94.1"
+
+          api_available:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Whether provider has API access"
+
+      # Zone Information
+      zone_info:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          zone_name:
+            type: string
+            required: false
+            nullable: true
+            description: "DNS zone name"
+            example: "maxseiner.casa"
+
+          zone_type:
+            type: string
+            required: false
+            nullable: true
+            enum: [primary, secondary, forward, stub]
+            description: "Type of DNS zone"
+
+          nameservers:
+            type: array
+            required: false
+            nullable: true
+            description: "Authoritative nameservers for zone"
+
+      # DNSSEC
+      dnssec:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          enabled:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Whether DNSSEC is enabled"
+
+          algorithm:
+            type: string
+            required: false
+            nullable: true
+            description: "DNSSEC algorithm"
+            examples: ["RSASHA256", "RSASHA512", "ECDSAP256SHA256"]
+
+          key_tag:
+            type: string
+            required: false
+            nullable: true
+            description: "DNSSEC key tag"
+
+      # Record History
+      history:
+        type: array
+        required: false
+        nullable: true
+        description: "History of changes to this DNS record"
+        item_schema:
+          type: object
+          fields:
+            changed_at:
+              type: string
+              required: true
+              format: iso8601
+              description: "When change was made"
+
+            old_value:
+              type: string
+              required: true
+              description: "Previous value"
+
+            new_value:
+              type: string
+              required: true
+              description: "New value"
+
+            changed_by:
+              type: string
+              required: false
+              nullable: true
+              description: "Who made the change"
+
+      # Notes
+      notes:
+        type: string
+        required: false
+        nullable: true
+        description: "Free-form notes about this DNS record"

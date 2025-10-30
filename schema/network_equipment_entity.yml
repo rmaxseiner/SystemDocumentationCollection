@@ -1,0 +1,1102 @@
+# Network Equipment Entity Schema
+# Defines the structure for network_equipment documents in rag_data.json
+
+entity_type: network_equipment
+description: Network equipment entity for firewalls, switches, access points, and routers
+
+# Root level fields
+root:
+  id:
+    type: string
+    required: true
+    pattern: "^network_equipment_[a-zA-Z0-9_-]+$"
+    description: "Unique identifier in format: network_equipment_{name}"
+    example: "network_equipment_firewalla-gold-se"
+
+  type:
+    type: string
+    required: true
+    enum: [network_equipment]
+    description: "Entity type discriminator"
+
+# Tier 1: Vector Search Content
+tier1:
+  title:
+    type: string
+    required: true
+    description: "Human-readable title for the network equipment"
+    example: "Firewalla Gold SE - Primary Gateway"
+
+  content:
+    type: string
+    required: true
+    min_length: 50
+    description: "Rich description for vector matching including equipment type, VLANs, services, connectivity"
+
+# Tier 2: Summary Metadata
+tier2:
+  metadata:
+    type: object
+    required: true
+    fields:
+      # Identity
+      equipment_name:
+        type: string
+        required: true
+        description: "Equipment name"
+        example: "firewalla-gold-se"
+
+      equipment_type:
+        type: string
+        required: true
+        enum: [firewall, switch, access_point, router, gateway]
+        description: "Type of network equipment"
+
+      manufacturer:
+        type: string
+        required: true
+        description: "Equipment manufacturer"
+        examples: ["Firewalla", "TP-Link", "Ubiquiti", "Cisco"]
+
+      model:
+        type: string
+        required: true
+        description: "Equipment model"
+        example: "Gold SE"
+
+      # Network Configuration
+      management_ip:
+        type: string
+        required: true
+        description: "Management IP address"
+        example: "192.168.94.1"
+
+      management_vlan:
+        type: integer
+        required: false
+        nullable: true
+        description: "Management VLAN ID"
+        example: 1
+
+      hostname:
+        type: string
+        required: false
+        nullable: true
+        description: "Hostname"
+        example: "firewalla.local"
+
+      mac_address:
+        type: string
+        required: false
+        nullable: true
+        description: "Primary MAC address"
+
+      # Physical Specifications
+      port_count:
+        type: integer
+        required: false
+        nullable: true
+        description: "Number of ports (for switches)"
+        example: 24
+
+      poe_capable:
+        type: boolean
+        required: false
+        nullable: true
+        description: "Whether equipment can provide PoE"
+
+      poe_budget_watts:
+        type: integer
+        required: false
+        nullable: true
+        description: "Total PoE power budget in watts"
+        example: 250
+
+      form_factor:
+        type: string
+        required: false
+        nullable: true
+        description: "Physical form factor"
+        examples: ["1U", "2U", "desktop", "ceiling-mount", "wall-mount"]
+
+      # Location
+      location:
+        type: string
+        required: false
+        nullable: true
+        description: "Physical location"
+        examples: ["main_rack", "top_floor", "desk_area"]
+
+      rack_unit:
+        type: string
+        required: false
+        nullable: true
+        description: "Rack unit position"
+        example: "U12"
+
+      # Connectivity
+      uplink_port:
+        type: integer
+        required: false
+        nullable: true
+        description: "Port number used for uplink"
+
+      uplink_to:
+        type: string
+        required: false
+        nullable: true
+        description: "Device this equipment uplinks to"
+        example: "firewalla-gold-se"
+
+      # VLANs
+      vlan_participation:
+        type: array
+        required: false
+        nullable: true
+        description: "VLANs this equipment participates in"
+
+      native_vlan:
+        type: integer
+        required: false
+        nullable: true
+        description: "Native/default VLAN"
+
+      # State
+      status:
+        type: string
+        required: true
+        enum: [online, offline, degraded, maintenance]
+        description: "Current operational status"
+
+      firmware_version:
+        type: string
+        required: false
+        nullable: true
+        description: "Current firmware version"
+
+      # Role
+      role:
+        type: string
+        required: false
+        nullable: true
+        description: "Network role"
+        examples: ["primary_gateway", "core_switch", "access_switch", "distribution"]
+
+      # Metadata
+      last_updated:
+        type: string
+        required: true
+        format: iso8601
+        description: "When equipment data was last updated"
+
+# Tier 3: Detailed Information
+tier3:
+  details:
+    type: object
+    required: true
+    fields:
+      # Hardware Details
+      hardware:
+        type: object
+        required: true
+        fields:
+          manufacturer:
+            type: string
+            required: true
+            description: "Equipment manufacturer"
+
+          model:
+            type: string
+            required: true
+            description: "Equipment model"
+
+          model_full:
+            type: string
+            required: false
+            nullable: true
+            description: "Full model name"
+
+          serial_number:
+            type: string
+            required: false
+            nullable: true
+            description: "Hardware serial number"
+
+          hardware_version:
+            type: string
+            required: false
+            nullable: true
+            description: "Hardware version"
+
+          firmware_version:
+            type: string
+            required: false
+            nullable: true
+            description: "Firmware version"
+
+          mac_addresses:
+            type: array
+            required: false
+            nullable: true
+            description: "All MAC addresses"
+
+          form_factor:
+            type: string
+            required: false
+            nullable: true
+            description: "Physical form factor"
+
+          dimensions:
+            type: string
+            required: false
+            nullable: true
+            description: "Physical dimensions"
+
+          weight:
+            type: string
+            required: false
+            nullable: true
+            description: "Equipment weight"
+
+          power_consumption:
+            type: string
+            required: false
+            nullable: true
+            description: "Power consumption"
+
+          port_count:
+            type: integer
+            required: false
+            nullable: true
+            description: "Number of ports"
+
+          port_speed:
+            type: string
+            required: false
+            nullable: true
+            description: "Port speed"
+
+          sfp_ports:
+            type: integer
+            required: false
+            nullable: true
+            description: "Number of SFP/SFP+ ports"
+
+          poe_capable:
+            type: boolean
+            required: false
+            nullable: true
+            description: "PoE capability"
+
+          poe_standard:
+            type: string
+            required: false
+            nullable: true
+            description: "PoE standard"
+
+          poe_budget_watts:
+            type: integer
+            required: false
+            nullable: true
+            description: "PoE budget in watts"
+
+          poe_per_port_watts:
+            type: integer
+            required: false
+            nullable: true
+            description: "PoE per port in watts"
+
+      # Network Configuration
+      network:
+        type: object
+        required: true
+        fields:
+          management_ip:
+            type: string
+            required: true
+            description: "Management IP address"
+
+          management_subnet:
+            type: string
+            required: false
+            nullable: true
+            description: "Management subnet mask"
+
+          management_vlan:
+            type: integer
+            required: false
+            nullable: true
+            description: "Management VLAN ID"
+
+          management_url:
+            type: string
+            required: false
+            nullable: true
+            description: "Management web interface URL"
+
+          interfaces:
+            type: array
+            required: false
+            nullable: true
+            description: "Network interfaces"
+            item_schema:
+              type: object
+              fields:
+                interface_name:
+                  type: string
+                  required: true
+                  description: "Interface name"
+
+                interface_type:
+                  type: string
+                  required: true
+                  description: "Interface type"
+
+                mac_address:
+                  type: string
+                  required: false
+                  nullable: true
+                  description: "Interface MAC address"
+
+                ip_address:
+                  type: string
+                  required: false
+                  nullable: true
+                  description: "Interface IP address"
+
+                subnet:
+                  type: string
+                  required: false
+                  nullable: true
+                  description: "Subnet mask"
+
+                vlan:
+                  type: integer
+                  required: false
+                  nullable: true
+                  description: "VLAN ID"
+
+                speed:
+                  type: string
+                  required: false
+                  nullable: true
+                  description: "Interface speed"
+
+                duplex:
+                  type: string
+                  required: false
+                  nullable: true
+                  description: "Duplex mode"
+
+                status:
+                  type: string
+                  required: false
+                  nullable: true
+                  description: "Interface status"
+
+          vlans:
+            type: array
+            required: false
+            nullable: true
+            description: "VLAN configurations"
+            item_schema:
+              type: object
+              fields:
+                vlan_id:
+                  type: integer
+                  required: true
+                  description: "VLAN ID"
+
+                vlan_name:
+                  type: string
+                  required: true
+                  description: "VLAN name"
+
+                subnet:
+                  type: string
+                  required: true
+                  description: "VLAN subnet"
+
+                gateway:
+                  type: string
+                  required: false
+                  nullable: true
+                  description: "VLAN gateway"
+
+                dhcp_enabled:
+                  type: boolean
+                  required: false
+                  nullable: true
+                  description: "DHCP enabled"
+
+                description:
+                  type: string
+                  required: false
+                  nullable: true
+                  description: "VLAN description"
+
+          default_gateway:
+            type: string
+            required: false
+            nullable: true
+            description: "Default gateway"
+
+          static_routes:
+            type: array
+            required: false
+            nullable: true
+            description: "Static routes"
+            item_schema:
+              type: object
+              fields:
+                destination:
+                  type: string
+                  required: true
+                  description: "Destination network"
+
+                gateway:
+                  type: string
+                  required: true
+                  description: "Gateway IP"
+
+                interface:
+                  type: string
+                  required: false
+                  nullable: true
+                  description: "Interface name"
+
+      # Port Configuration
+      ports:
+        type: array
+        required: false
+        nullable: true
+        description: "Port configurations (for switches)"
+        item_schema:
+          type: object
+          fields:
+            port_number:
+              type: integer
+              required: true
+              description: "Port number"
+
+            port_name:
+              type: string
+              required: false
+              nullable: true
+              description: "Port name"
+
+            port_type:
+              type: string
+              required: true
+              description: "Port type"
+
+            status:
+              type: string
+              required: true
+              description: "Port status"
+
+            speed:
+              type: string
+              required: false
+              nullable: true
+              description: "Port speed"
+
+            duplex:
+              type: string
+              required: false
+              nullable: true
+              description: "Duplex mode"
+
+            mode:
+              type: string
+              required: false
+              nullable: true
+              description: "VLAN mode"
+
+            vlan:
+              type: integer
+              required: false
+              nullable: true
+              description: "Access VLAN"
+
+            tagged_vlans:
+              type: array
+              required: false
+              nullable: true
+              description: "Tagged VLANs"
+
+            native_vlan:
+              type: integer
+              required: false
+              nullable: true
+              description: "Native VLAN"
+
+            poe_enabled:
+              type: boolean
+              required: false
+              nullable: true
+              description: "PoE enabled"
+
+            poe_power_watts:
+              type: float
+              required: false
+              nullable: true
+              description: "Current PoE power draw"
+
+            connected_device:
+              type: string
+              required: false
+              nullable: true
+              description: "Connected device name"
+
+            connected_device_type:
+              type: string
+              required: false
+              nullable: true
+              description: "Connected device type"
+
+            description:
+              type: string
+              required: false
+              nullable: true
+              description: "Port description"
+
+      # Wireless Configuration
+      wireless:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          capabilities:
+            type: object
+            required: false
+            nullable: true
+            fields:
+              standards:
+                type: array
+                required: false
+                nullable: true
+                description: "Supported WiFi standards"
+
+              bands:
+                type: array
+                required: false
+                nullable: true
+                description: "Supported frequency bands"
+
+              max_clients:
+                type: integer
+                required: false
+                nullable: true
+                description: "Maximum client count"
+
+              spatial_streams:
+                type: string
+                required: false
+                nullable: true
+                description: "Spatial streams"
+
+              channel_width:
+                type: array
+                required: false
+                nullable: true
+                description: "Supported channel widths"
+
+          radios:
+            type: array
+            required: false
+            nullable: true
+            description: "Radio configurations"
+            item_schema:
+              type: object
+              fields:
+                radio_id:
+                  type: integer
+                  required: true
+                  description: "Radio ID"
+
+                band:
+                  type: string
+                  required: true
+                  description: "Frequency band"
+
+                channel:
+                  type: integer
+                  required: false
+                  nullable: true
+                  description: "Channel number"
+
+                channel_width:
+                  type: string
+                  required: false
+                  nullable: true
+                  description: "Channel width"
+
+                tx_power:
+                  type: string
+                  required: false
+                  nullable: true
+                  description: "Transmit power"
+
+                enabled:
+                  type: boolean
+                  required: true
+                  description: "Radio enabled"
+
+                ssids:
+                  type: array
+                  required: false
+                  nullable: true
+                  description: "SSIDs on this radio"
+
+          ssids:
+            type: array
+            required: false
+            nullable: true
+            description: "SSID configurations"
+            item_schema:
+              type: object
+              fields:
+                ssid_name:
+                  type: string
+                  required: true
+                  description: "SSID name"
+
+                vlan:
+                  type: integer
+                  required: false
+                  nullable: true
+                  description: "SSID VLAN"
+
+                security:
+                  type: string
+                  required: true
+                  description: "Security type"
+
+                enabled:
+                  type: boolean
+                  required: true
+                  description: "SSID enabled"
+
+                hidden:
+                  type: boolean
+                  required: false
+                  nullable: true
+                  description: "Hidden SSID"
+
+                band:
+                  type: string
+                  required: false
+                  nullable: true
+                  description: "Band selection"
+
+          connected_clients:
+            type: integer
+            required: false
+            nullable: true
+            description: "Current connected clients"
+
+          uptime:
+            type: string
+            required: false
+            nullable: true
+            description: "Uptime"
+
+      # Management Access
+      management:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          web_ui:
+            type: object
+            required: false
+            nullable: true
+            fields:
+              enabled:
+                type: boolean
+                required: true
+                description: "Web UI enabled"
+
+              url:
+                type: string
+                required: false
+                nullable: true
+                description: "Web UI URL"
+
+              port_http:
+                type: integer
+                required: false
+                nullable: true
+                description: "HTTP port"
+
+              port_https:
+                type: integer
+                required: false
+                nullable: true
+                description: "HTTPS port"
+
+              default_credentials:
+                type: boolean
+                required: false
+                nullable: true
+                description: "Using default credentials"
+
+          ssh:
+            type: object
+            required: false
+            nullable: true
+            fields:
+              enabled:
+                type: boolean
+                required: true
+                description: "SSH enabled"
+
+              port:
+                type: integer
+                required: false
+                nullable: true
+                description: "SSH port"
+
+              key_authentication:
+                type: boolean
+                required: false
+                nullable: true
+                description: "Key authentication enabled"
+
+          snmp:
+            type: object
+            required: false
+            nullable: true
+            fields:
+              enabled:
+                type: boolean
+                required: false
+                nullable: true
+                description: "SNMP enabled"
+
+              version:
+                type: string
+                required: false
+                nullable: true
+                description: "SNMP version"
+
+              port:
+                type: integer
+                required: false
+                nullable: true
+                description: "SNMP port"
+
+          api:
+            type: object
+            required: false
+            nullable: true
+            fields:
+              enabled:
+                type: boolean
+                required: false
+                nullable: true
+                description: "API enabled"
+
+              endpoint:
+                type: string
+                required: false
+                nullable: true
+                description: "API endpoint"
+
+              authentication:
+                type: string
+                required: false
+                nullable: true
+                description: "Authentication method"
+
+          controller:
+            type: object
+            required: false
+            nullable: true
+            fields:
+              managed_by_controller:
+                type: boolean
+                required: false
+                nullable: true
+                description: "Managed by controller"
+
+              controller_url:
+                type: string
+                required: false
+                nullable: true
+                description: "Controller URL"
+
+              controller_name:
+                type: string
+                required: false
+                nullable: true
+                description: "Controller name"
+
+      # Services
+      services:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          dhcp:
+            type: object
+            required: false
+            nullable: true
+            fields:
+              enabled:
+                type: boolean
+                required: false
+                nullable: true
+                description: "DHCP enabled"
+
+              server_ip:
+                type: string
+                required: false
+                nullable: true
+                description: "DHCP server IP"
+
+              vlans:
+                type: array
+                required: false
+                nullable: true
+                description: "VLANs serving DHCP"
+
+              reservations:
+                type: array
+                required: false
+                nullable: true
+                description: "DHCP reservations"
+                item_schema:
+                  type: object
+                  fields:
+                    mac:
+                      type: string
+                      required: true
+                      description: "MAC address"
+
+                    ip:
+                      type: string
+                      required: true
+                      description: "Reserved IP"
+
+                    hostname:
+                      type: string
+                      required: false
+                      nullable: true
+                      description: "Hostname"
+
+          dns:
+            type: object
+            required: false
+            nullable: true
+            fields:
+              enabled:
+                type: boolean
+                required: false
+                nullable: true
+                description: "DNS enabled"
+
+              server_ip:
+                type: string
+                required: false
+                nullable: true
+                description: "DNS server IP"
+
+              forwarders:
+                type: array
+                required: false
+                nullable: true
+                description: "DNS forwarders"
+
+              local_domains:
+                type: array
+                required: false
+                nullable: true
+                description: "Local domains"
+
+          nat:
+            type: object
+            required: false
+            nullable: true
+            fields:
+              enabled:
+                type: boolean
+                required: false
+                nullable: true
+                description: "NAT enabled"
+
+              type:
+                type: string
+                required: false
+                nullable: true
+                description: "NAT type"
+
+          vpn:
+            type: object
+            required: false
+            nullable: true
+            fields:
+              enabled:
+                type: boolean
+                required: false
+                nullable: true
+                description: "VPN enabled"
+
+              type:
+                type: string
+                required: false
+                nullable: true
+                description: "VPN type"
+
+              endpoint:
+                type: string
+                required: false
+                nullable: true
+                description: "VPN endpoint"
+
+          firewall:
+            type: object
+            required: false
+            nullable: true
+            fields:
+              enabled:
+                type: boolean
+                required: false
+                nullable: true
+                description: "Firewall enabled"
+
+              default_policy:
+                type: string
+                required: false
+                nullable: true
+                description: "Default policy"
+
+              rules_count:
+                type: integer
+                required: false
+                nullable: true
+                description: "Number of rules"
+
+      # Features
+      features:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          capabilities:
+            type: array
+            required: false
+            nullable: true
+            description: "Equipment capabilities"
+
+          security_features:
+            type: array
+            required: false
+            nullable: true
+            description: "Security features"
+
+          qos_enabled:
+            type: boolean
+            required: false
+            nullable: true
+            description: "QoS enabled"
+
+          spanning_tree:
+            type: string
+            required: false
+            nullable: true
+            description: "Spanning tree protocol"
+
+          link_aggregation:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Link aggregation support"
+
+          jumbo_frames:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Jumbo frames support"
+
+      # Monitoring
+      monitoring:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          snmp_enabled:
+            type: boolean
+            required: false
+            nullable: true
+            description: "SNMP monitoring enabled"
+
+          syslog_enabled:
+            type: boolean
+            required: false
+            nullable: true
+            description: "Syslog enabled"
+
+          syslog_server:
+            type: string
+            required: false
+            nullable: true
+            description: "Syslog server"
+
+          netflow_enabled:
+            type: boolean
+            required: false
+            nullable: true
+            description: "NetFlow enabled"
+
+          netflow_collector:
+            type: string
+            required: false
+            nullable: true
+            description: "NetFlow collector"
+
+      # Maintenance
+      maintenance:
+        type: object
+        required: false
+        nullable: true
+        fields:
+          last_reboot:
+            type: string
+            required: false
+            nullable: true
+            format: iso8601
+            description: "Last reboot time"
+
+          uptime:
+            type: string
+            required: false
+            nullable: true
+            description: "Current uptime"
+
+          last_config_change:
+            type: string
+            required: false
+            nullable: true
+            format: iso8601
+            description: "Last configuration change"
+
+          backup_schedule:
+            type: string
+            required: false
+            nullable: true
+            description: "Backup schedule"
+
+          backup_location:
+            type: string
+            required: false
+            nullable: true
+            description: "Backup location"
+
+      # Notes
+      notes:
+        type: string
+        required: false
+        nullable: true
+        description: "Operational notes about network equipment"

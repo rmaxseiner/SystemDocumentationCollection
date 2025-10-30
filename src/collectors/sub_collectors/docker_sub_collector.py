@@ -90,23 +90,16 @@ class DockerSubCollector(SubCollector):
                         if not isinstance(container_details, dict):
                             continue
 
-                        # Build container info
+                        # Store the full docker inspect output
+                        # The processor will extract what it needs from this complete data
                         container_info = {
                             'id': container_details.get('Id', container_id),
                             'name': container_details.get('Name', '').lstrip('/'),
                             'image': container_details.get('Config', {}).get('Image', 'unknown'),
                             'status': container_details.get('State', {}).get('Status', 'unknown'),
-                            'state': container_details.get('State', {}),
                             'created': container_details.get('Created', ''),
-                            'ports': self._parse_ports(container_details),
-                            'devices': self._parse_devices(container_details),
-                            'mounts': self._format_mounts(container_details.get('Mounts', [])),
-                            'environment': container_details.get('Config', {}).get('Env', []),
-                            'labels': container_details.get('Config', {}).get('Labels') or {},
-                            'networks': list(
-                                container_details.get('NetworkSettings', {}).get('Networks', {}).keys()
-                            ),
-                            'restart_policy': container_details.get('HostConfig', {}).get('RestartPolicy', {})
+                            # Store full inspect output for processor to use
+                            'inspect': container_details
                         }
                         containers.append(container_info)
 
@@ -197,79 +190,3 @@ class DockerSubCollector(SubCollector):
                 self.logger.warning("Failed to parse docker version JSON")
 
         return system_info
-
-    def _parse_ports(self, container_details: Dict) -> Dict:
-        """Parse port information from container inspect output"""
-        ports = {}
-
-        host_config = container_details.get('HostConfig', {})
-        if not isinstance(host_config, dict):
-            return ports
-
-        port_bindings = host_config.get('PortBindings', {})
-        if not isinstance(port_bindings, dict):
-            port_bindings = {}
-
-        config = container_details.get('Config', {})
-        if not isinstance(config, dict):
-            config = {}
-
-        exposed_ports = config.get('ExposedPorts', {})
-        if not isinstance(exposed_ports, dict):
-            exposed_ports = {}
-
-        # Combine port binding and exposed port information
-        for container_port, host_bindings in port_bindings.items():
-            if host_bindings and isinstance(host_bindings, list):
-                for binding in host_bindings:
-                    if isinstance(binding, dict):
-                        ports[container_port] = [
-                            {
-                                'HostIp': binding.get('HostIp', ''),
-                                'HostPort': binding.get('HostPort', '')
-                            }
-                        ]
-
-        # Add exposed ports that aren't bound
-        for exposed_port in exposed_ports.keys():
-            if exposed_port not in ports:
-                ports[exposed_port] = None
-
-        return ports
-
-    def _parse_devices(self, container_details: Dict) -> List[str]:
-        """Parse device information from container inspect output"""
-        host_config = container_details.get('HostConfig', {})
-        if not isinstance(host_config, dict):
-            return []
-
-        devices = host_config.get('Devices', [])
-        if not isinstance(devices, list):
-            return []
-
-        # Extract device paths
-        device_paths = []
-        for device in devices:
-            if isinstance(device, dict):
-                path_on_host = device.get('PathOnHost', '')
-                if path_on_host:
-                    device_paths.append(path_on_host)
-
-        return device_paths
-
-    def _format_mounts(self, mounts: List[Dict]) -> List[Dict]:
-        """Format mount information for consistent output"""
-        formatted_mounts = []
-
-        for mount in mounts:
-            formatted_mount = {
-                'type': mount.get('Type', 'unknown'),
-                'source': mount.get('Source', ''),
-                'destination': mount.get('Destination', ''),
-                'mode': mount.get('Mode', ''),
-                'rw': mount.get('RW', True),
-                'propagation': mount.get('Propagation', '')
-            }
-            formatted_mounts.append(formatted_mount)
-
-        return formatted_mounts
