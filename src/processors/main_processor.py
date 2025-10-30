@@ -42,6 +42,9 @@ class MainProcessor(BaseProcessor):
         # Store all documents for aggregation
         self.all_documents = []
 
+        # Store all relationships for aggregation
+        self.all_relationships = []
+
         # Track which systems we're processing (for de-duplication)
         self.processed_systems = set()
 
@@ -113,16 +116,18 @@ class MainProcessor(BaseProcessor):
 
             self.logger.info(f"Found {len(unified_files)} unified collection files")
 
-            # Reset document aggregation
+            # Reset document and relationship aggregation
             self.all_documents = []
+            self.all_relationships = []
             self.processed_systems = set()
 
             # Process each system and track system names
             systems_processed = 0
             for unified_file in unified_files:
                 try:
-                    system_name, system_documents = self._process_system_file(unified_file)
+                    system_name, system_documents, system_relationships = self._process_system_file(unified_file)
                     self.all_documents.extend(system_documents)
+                    self.all_relationships.extend(system_relationships)
                     self.processed_systems.add(system_name)
                     systems_processed += 1
                 except Exception as e:
@@ -166,7 +171,7 @@ class MainProcessor(BaseProcessor):
         self.logger.info(f"Found {len(unified_files)} unified files in {self.collected_data_dir}")
         return unified_files
 
-    def _process_system_file(self, unified_file: Path) -> tuple[str, List[Dict[str, Any]]]:
+    def _process_system_file(self, unified_file: Path) -> tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         Process a single unified collection file
 
@@ -174,7 +179,7 @@ class MainProcessor(BaseProcessor):
             unified_file: Path to *_unified.json file
 
         Returns:
-            Tuple of (system_name, list of RAG documents)
+            Tuple of (system_name, list of RAG documents, list of relationships)
         """
         self.logger.info(f"Processing unified file: {unified_file.name}")
 
@@ -197,6 +202,7 @@ class MainProcessor(BaseProcessor):
 
         # Process each section with registered sub-processors
         system_documents = []
+        system_relationships = []
 
         for section_name, section_data in sections.items():
             # Get list of sub-processors for this section (may be multiple)
@@ -217,20 +223,21 @@ class MainProcessor(BaseProcessor):
                         # Special handling for HardwareSubProcessor - pass ALL sections
                         if sub_processor_class.__name__ == 'HardwareSubProcessor':
                             # Pass all sections so it can create comprehensive server documents
-                            documents = sub_processor.process_with_all_sections(sections)
+                            documents, relationships = sub_processor.process_with_all_sections(sections)
                         else:
                             # Regular sub-processors get their specific section
-                            documents = sub_processor.process(section_data)
+                            documents, relationships = sub_processor.process(section_data)
 
                         system_documents.extend(documents)
-                        self.logger.info(f"  Generated {len(documents)} documents from {section_name} using {sub_processor_class.__name__}")
+                        system_relationships.extend(relationships)
+                        self.logger.info(f"  Generated {len(documents)} documents and {len(relationships)} relationships from {section_name} using {sub_processor_class.__name__}")
                     except Exception as e:
                         self.logger.error(f"Sub-processor {sub_processor_class.__name__} failed for section '{section_name}': {e}")
             else:
                 self.logger.debug(f"No sub-processor registered for section '{section_name}'")
 
-        self.logger.info(f"Completed processing {system_name}: {len(system_documents)} documents generated")
-        return system_name, system_documents
+        self.logger.info(f"Completed processing {system_name}: {len(system_documents)} documents and {len(system_relationships)} relationships generated")
+        return system_name, system_documents, system_relationships
 
     def _save_rag_data_json(self, output_path: Path) -> Path:
         """
@@ -244,48 +251,58 @@ class MainProcessor(BaseProcessor):
         """
         rag_data_file = output_path / 'rag_data.json'
 
-        # Load existing rag_data.json or create new structure
-        if rag_data_file.exists():
-            try:
-                with open(rag_data_file, 'r') as f:
-                    rag_data = json.load(f)
-                self.logger.info("Loaded existing rag_data.json")
-            except Exception as e:
-                self.logger.warning(f"Failed to load existing rag_data.json: {e}, creating new")
-                rag_data = self._create_empty_rag_data()
-        else:
-            self.logger.info("Creating new rag_data.json")
-            rag_data = self._create_empty_rag_data()
-
-        # Remove existing documents from systems we're re-processing
-        original_count = len(rag_data.get('documents', []))
-
-        if self.processed_systems:
-            # Remove documents from systems being reprocessed
-            # Keep documents from other systems (legacy processors, other systems)
-            filtered_documents = []
-            removed_count = 0
-
-            for doc in rag_data.get('documents', []):
-                # Get system name from document metadata
-                doc_system = doc.get('metadata', {}).get('system_name') or doc.get('metadata', {}).get('hosted_by')
-
-                # Keep document if it's not from a system we're reprocessing
-                if doc_system not in self.processed_systems:
-                    filtered_documents.append(doc)
-                else:
-                    removed_count += 1
-
-            rag_data['documents'] = filtered_documents
-            self.logger.info(f"Removed {removed_count} existing documents from {len(self.processed_systems)} reprocessed systems")
+        # Always start fresh - create new rag_data structure
+        # This prevents duplicate accumulation and is simpler than incremental updates
+        # Since we collect from all systems every run, there's no benefit to keeping old data
+        self.logger.info("Creating fresh rag_data.json (clearing any existing data)")
+        rag_data = self._create_empty_rag_data()
 
         # Add new documents
         rag_data['documents'].extend(self.all_documents)
         self.logger.info(f"Added {len(self.all_documents)} new documents")
 
+        # Deduplicate documents by ID (keep first occurrence)
+        seen_docs = set()
+        deduplicated_docs = []
+        duplicates_removed = 0
+        for doc in rag_data['documents']:
+            doc_id = doc.get('id')
+            if doc_id not in seen_docs:
+                seen_docs.add(doc_id)
+                deduplicated_docs.append(doc)
+            else:
+                duplicates_removed += 1
+
+        rag_data['documents'] = deduplicated_docs
+        if duplicates_removed > 0:
+            self.logger.info(f"Removed {duplicates_removed} duplicate documents by ID")
+
+        # Add new relationships
+        if 'relationships' not in rag_data:
+            rag_data['relationships'] = []
+        rag_data['relationships'].extend(self.all_relationships)
+        self.logger.info(f"Added {len(self.all_relationships)} new relationships")
+
+        # Deduplicate relationships by ID (keep first occurrence)
+        seen_rels = set()
+        deduplicated_rels = []
+        rels_removed = 0
+        for rel in rag_data['relationships']:
+            rel_id = rel.get('id')
+            if rel_id not in seen_rels:
+                seen_rels.add(rel_id)
+                deduplicated_rels.append(rel)
+            else:
+                rels_removed += 1
+
+        rag_data['relationships'] = deduplicated_rels
+        if rels_removed > 0:
+            self.logger.info(f"Removed {rels_removed} duplicate relationships by ID")
+
         # Update metadata
         rag_data['metadata']['export_timestamp'] = datetime.now().isoformat()
         rag_data['metadata']['total_documents'] = len(rag_data['documents'])
+        rag_data['metadata']['total_relationships'] = len(rag_data.get('relationships', []))
 
         # Count document types
         doc_type_counts = {}
