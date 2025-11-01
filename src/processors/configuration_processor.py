@@ -369,10 +369,21 @@ class ConfigurationProcessor(BaseProcessor):
             self.logger.warning(f"Failed to parse docker-compose file {file_path}")
             return None, []
 
+        # Save the docker-compose file to output directory
+        saved_file_path = self._save_docker_compose_file(
+            content=content,
+            filename=filename,
+            hostname=hostname,
+            directory=directory
+        )
+
         # Generate document ID
         content_hash = hashlib.sha256(content.encode()).hexdigest()
         sanitized_name = Path(directory).name.replace('.', '-').replace('/', '-')
         doc_id = f"config_{hostname}_compose-{sanitized_name}_{content_hash[:8]}"
+
+        # Calculate relative path for consistent metadata (like other config files)
+        relative_storage_path = str(saved_file_path.relative_to(self.config_files_dir))
 
         # Build content description
         service_count = parsed_config.get('service_count', 0)
@@ -380,7 +391,7 @@ class ConfigurationProcessor(BaseProcessor):
         content_description = (
             f"Docker Compose configuration file at {directory}. "
             f"Defines {service_count} services: {', '.join(service_names[:5])}. "
-            f"Located at {file_path} on {hostname}."
+            f"Originally located at {file_path} on {hostname}."
         )
 
         # Add search terms
@@ -405,8 +416,8 @@ class ConfigurationProcessor(BaseProcessor):
                 "config_name": filename,
                 "config_type": "docker_compose",
 
-                # File Information
-                "file_path": file_path,
+                # File Information (consistent with other config files - relative paths)
+                "file_path": relative_storage_path,  # Relative path in configuration_files directory
                 "file_size": file_size,
                 "file_format": "yaml",
 
@@ -415,8 +426,9 @@ class ConfigurationProcessor(BaseProcessor):
                 "container_name": Path(directory).name,
                 "configures_type": "container",
 
-                # File Retrieval (not stored separately, embedded in collected data)
-                "file_storage_path": file_path,
+                # File Retrieval (consistent with other config files)
+                "file_storage_path": relative_storage_path,  # Where file is stored in configuration_files
+                "original_host_path": file_path,  # Original location on host server
                 "checksum_sha256": content_hash,
 
                 # Parsed configuration
@@ -434,13 +446,16 @@ class ConfigurationProcessor(BaseProcessor):
             # Tier 3: Detailed Information
             "details": {
                 "file_info": {
-                    "full_path": file_path,
+                    "full_path": relative_storage_path,  # Consistent with file_path
+                    "original_host_path": file_path,  # Original location on host
                     "size_bytes": file_size,
-                    "format": "yaml"
+                    "format": "yaml",
+                    "saved_to": str(saved_file_path)
                 },
                 "storage": {
                     "stored_on_host": hostname,
-                    "stored_on_type": "virtual_server"
+                    "stored_on_type": "virtual_server",
+                    "local_storage_path": str(saved_file_path)
                 }
             }
         }
@@ -530,6 +545,35 @@ class ConfigurationProcessor(BaseProcessor):
 
         target_path = target_dir / source_file.name
         shutil.copy2(source_file, target_path)
+
+        return target_path
+
+    def _save_docker_compose_file(self, content: str, filename: str, hostname: str, directory: str) -> Path:
+        """
+        Save docker-compose file content to output directory structure.
+
+        Args:
+            content: Docker-compose file content
+            filename: Filename (e.g., docker-compose.yml)
+            hostname: Hostname where file is located
+            directory: Original directory path (e.g., /root/dockerhome)
+
+        Returns:
+            Path to saved file
+        """
+        # Use directory name as subfolder to differentiate multiple compose files on same host
+        # e.g., rag_output/configuration_files/server-containers/docker-compose/dockerhome/docker-compose.yml
+        dir_name = Path(directory).name if directory else "default"
+        target_dir = self.config_files_dir / hostname / "docker-compose" / dir_name
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        target_path = target_dir / filename
+
+        # Write content to file
+        with open(target_path, 'w') as f:
+            f.write(content)
+
+        self.logger.info(f"Saved docker-compose file to {target_path}")
 
         return target_path
 

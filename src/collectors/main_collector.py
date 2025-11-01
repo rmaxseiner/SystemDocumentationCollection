@@ -356,27 +356,67 @@ class MainCollector(SystemStateCollector):
 
         return summary
 
-    def sanitize_data(self, data: Any) -> Any:
+    def sanitize_data(self, data: Any, current_path: str = '') -> Any:
         """
         Unified collector data sanitization.
         Sanitizes sensitive information from all sections.
+
+        Args:
+            data: Data to sanitize
+            current_path: Current path in data structure (for context-aware sanitization)
         """
         if isinstance(data, dict):
             sanitized = {}
             for key, value in data.items():
+                new_path = f"{current_path}.{key}" if current_path else key
+
+                # Skip sanitization for docker-compose file content
+                # These files contain the word "key" or "token" in environment variables
+                # but we need the full content for processing
+                if new_path in ['sections.docker_compose', 'docker_compose'] or \
+                   (current_path in ['sections.docker_compose', 'docker_compose'] and key == 'compose_files'):
+                    # Don't sanitize docker_compose section (but still recurse to handle nested dicts)
+                    if isinstance(value, (dict, list)):
+                        sanitized[key] = self._sanitize_docker_compose(value)
+                    else:
+                        sanitized[key] = value
                 # Sanitize sensitive keys
-                if any(sensitive in key.lower() for sensitive in [
+                elif any(sensitive in key.lower() for sensitive in [
                     'password', 'secret', 'token', 'key', 'credential'
                 ]):
                     if key.lower() in ['ssh_key_path', 'pcie_generation', 'pcie_width']:
                         # These keys are not sensitive
-                        sanitized[key] = self.sanitize_data(value)
+                        sanitized[key] = self.sanitize_data(value, new_path)
                     else:
                         sanitized[key] = 'REDACTED'
                 else:
-                    sanitized[key] = self.sanitize_data(value)
+                    sanitized[key] = self.sanitize_data(value, new_path)
             return sanitized
         elif isinstance(data, list):
-            return [self.sanitize_data(item) for item in data]
+            return [self.sanitize_data(item, current_path) for item in data]
         else:
             return super().sanitize_data(data)
+
+    def _sanitize_docker_compose(self, data: Any) -> Any:
+        """
+        Special sanitization for docker-compose data.
+        Preserves 'content' field while still sanitizing actual secrets.
+        """
+        if isinstance(data, dict):
+            sanitized = {}
+            for key, value in data.items():
+                # Never sanitize 'content' field in docker-compose files
+                if key == 'content':
+                    sanitized[key] = value
+                # Sanitize sensitive keys (but not content)
+                elif any(sensitive in key.lower() for sensitive in [
+                    'password', 'secret', 'token', 'credential'
+                ]) and key != 'content':
+                    sanitized[key] = 'REDACTED'
+                else:
+                    sanitized[key] = self._sanitize_docker_compose(value)
+            return sanitized
+        elif isinstance(data, list):
+            return [self._sanitize_docker_compose(item) for item in data]
+        else:
+            return data
